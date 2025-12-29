@@ -51,3 +51,8 @@ class Map(Base):
         back_populates="map",
         cascade="all, delete-orphan"
     )
+    group_shares: Mapped[list["GroupMap"]] = relationship(
+        "GroupMap",
+        back_populates="map",
+        cascade="all, delete-orphan"
+    )

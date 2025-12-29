@@ -68,3 +68,14 @@ class User(Base):
         back_populates="addressee",
         cascade="all, delete-orphan"
     )
+    owned_groups: Mapped[list["Group"]] = relationship(
+        "Group",
+        foreign_keys="Group.owner_id",
+        back_populates="owner",
+        cascade="all, delete-orphan"
+    )
+    group_memberships: Mapped[list["GroupMember"]] = relationship(
+        "GroupMember",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
