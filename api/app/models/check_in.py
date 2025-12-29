@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, Text
+from sqlalchemy import String, DateTime, ForeignKey, Text, Integer
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -27,6 +27,7 @@ class CheckIn(Base):
     )
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     photo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5 estrelas
     visited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     

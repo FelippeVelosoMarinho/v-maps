@@ -20,16 +20,26 @@ router = APIRouter(prefix="/check-ins", tags=["Check-ins"])
 @router.get("", response_model=list[CheckInWithDetails])
 async def get_check_ins(
     map_id: str | None = None,
+    place_id: str | None = None,
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Retorna check-ins. Se map_id for fornecido, filtra por mapa.
+    Retorna check-ins. Pode filtrar por map_id ou place_id.
     """
     query = select(CheckIn).order_by(CheckIn.visited_at.desc()).limit(limit)
     
-    if map_id:
+    if place_id:
+        # Filtrar por place_id específico
+        query = (
+            select(CheckIn)
+            .where(CheckIn.place_id == place_id)
+            .order_by(CheckIn.visited_at.desc())
+            .limit(limit)
+        )
+    elif map_id:
+        # Filtrar por map_id (todos os check-ins de lugares nesse mapa)
         query = (
             select(CheckIn)
             .join(Place, Place.id == CheckIn.place_id)
@@ -61,6 +71,7 @@ async def get_check_ins(
             place_id=ci.place_id,
             user_id=ci.user_id,
             comment=ci.comment,
+            rating=ci.rating,
             photo_url=ci.photo_url,
             visited_at=ci.visited_at,
             created_at=ci.created_at,
@@ -72,17 +83,25 @@ async def get_check_ins(
     return check_ins_with_details
 
 
-@router.post("", response_model=CheckInResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CheckInWithDetails, status_code=status.HTTP_201_CREATED)
 async def create_check_in(
     place_id: str = Form(...),
     comment: str | None = Form(None),
+    rating: int | None = Form(None),
     photo: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Cria um novo check-in com upload opcional de foto.
+    Cria um novo check-in com upload opcional de foto e avaliação.
     """
+    # Validar rating
+    if rating is not None and (rating < 1 or rating > 5):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Rating deve ser entre 1 e 5"
+        )
+    
     # Verificar se o lugar existe
     result = await db.execute(select(Place).where(Place.id == place_id))
     place = result.scalar_one_or_none()
@@ -130,6 +149,7 @@ async def create_check_in(
         place_id=place_id,
         user_id=current_user.id,
         comment=comment,
+        rating=rating,
         photo_url=photo_url,
         visited_at=datetime.utcnow()
     )
@@ -137,7 +157,26 @@ async def create_check_in(
     await db.commit()
     await db.refresh(new_check_in)
     
-    return new_check_in
+    # Buscar perfil do usuário
+    result = await db.execute(
+        select(Profile).where(Profile.user_id == current_user.id)
+    )
+    profile = result.scalar_one_or_none()
+    
+    # Retornar com detalhes completos
+    return CheckInWithDetails(
+        id=new_check_in.id,
+        place_id=new_check_in.place_id,
+        user_id=new_check_in.user_id,
+        comment=new_check_in.comment,
+        rating=new_check_in.rating,
+        photo_url=new_check_in.photo_url,
+        visited_at=new_check_in.visited_at,
+        created_at=new_check_in.created_at,
+        profile=profile,
+        place_name=place.name,
+        map_id=place.map_id
+    )
 
 
 @router.delete("/{check_in_id}", status_code=status.HTTP_204_NO_CONTENT)

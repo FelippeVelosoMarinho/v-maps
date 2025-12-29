@@ -1,10 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from app.schemas.profile import ProfileResponse
 
 
 class CheckInBase(BaseModel):
     comment: str | None = None
+    rating: int | None = Field(None, ge=1, le=5, description="Avaliação de 1 a 5 estrelas")
 
 
 class CheckInCreate(CheckInBase):
