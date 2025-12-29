@@ -13,6 +13,7 @@ from app.routers import (
     places_router,
     check_ins_router,
     chat_router,
+    friends_router,
 )
 
 
@@ -66,6 +67,7 @@ app.include_router(maps_router)
 app.include_router(places_router)
 app.include_router(check_ins_router)
 app.include_router(chat_router)
+app.include_router(friends_router)
 
 
 @app.get("/")

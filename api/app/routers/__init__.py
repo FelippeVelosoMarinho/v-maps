@@ -5,6 +5,7 @@ from app.routers.maps import router as maps_router
 from app.routers.places import router as places_router
 from app.routers.check_ins import router as check_ins_router
 from app.routers.chat import router as chat_router
+from app.routers.friends import router as friends_router
 
 __all__ = [
     "auth_router",
@@ -13,4 +14,5 @@ __all__ = [
     "places_router",
     "check_ins_router",
     "chat_router",
+    "friends_router",
 ]

@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, and_, or_
+from math import radians, cos, sin, asin, sqrt
 from app.database import get_db
 from app.models.user import User
 from app.models.map import Map
@@ -177,3 +178,57 @@ async def delete_place(
     
     await db.delete(place)
     await db.commit()
+
+
+def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    """
+    Calcula a distância em km entre dois pontos usando a fórmula de Haversine.
+    """
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371  # Raio da Terra em km
+    return c * r
+
+
+@router.get("/explore/nearby", response_model=list[PlaceResponse])
+async def get_nearby_places(
+    lat: float = Query(..., description="Latitude"),
+    lng: float = Query(..., description="Longitude"),
+    radius_km: float = Query(10.0, description="Raio de busca em km"),
+    limit: int = Query(50, le=100, description="Limite de resultados"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Retorna lugares públicos próximos à localização informada.
+    Busca lugares de mapas compartilhados (públicos).
+    """
+    # Busca lugares de mapas compartilhados (públicos) ou do próprio usuário
+    result = await db.execute(
+        select(Place)
+        .join(Map, Map.id == Place.map_id)
+        .where(
+            or_(
+                Map.is_shared == True,
+                Map.created_by == current_user.id
+            )
+        )
+    )
+    all_places = result.scalars().all()
+    
+    # Filtrar por distância usando Haversine
+    nearby_places = []
+    for place in all_places:
+        distance = haversine(lng, lat, place.lng, place.lat)
+        if distance <= radius_km:
+            # Add distance as a temporary attribute
+            place._distance = distance
+            nearby_places.append(place)
+    
+    # Ordenar por distância e limitar
+    nearby_places.sort(key=lambda p: p._distance)
+    
+    return nearby_places[:limit]

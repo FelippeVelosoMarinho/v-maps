@@ -7,6 +7,7 @@ from app.models.check_in import CheckIn
 from app.models.chat_message import ChatMessage
 from app.models.map_member import MapMember
 from app.models.map_invite import MapInvite
+from app.models.friendship import Friendship, FriendshipStatus
 
 __all__ = [
     "User",
@@ -17,4 +18,6 @@ __all__ = [
     "ChatMessage",
     "MapMember",
     "MapInvite",
+    "Friendship",
+    "FriendshipStatus",
 ]
