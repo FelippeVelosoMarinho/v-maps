@@ -18,23 +18,36 @@ services:
       
       # Uploads
       UPLOAD_DIR: /app/data/uploads
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.v-maps-backend.rule=Host(`tsapi.ciano.io`) && PathPrefix(`/vmaps`)"
+      - "traefik.http.routers.v-maps-backend.entrypoints=websecure"
+      - "traefik.http.routers.v-maps-backend.tls=true"
+      - "traefik.http.routers.v-maps-backend.tls.certresolver=tlschallenge"
+      - "traefik.http.routers.v-maps-backend.middlewares=secHeaders@file,v-maps-backend-cors@docker,v-maps-strip-prefix@docker"
+      - "traefik.http.services.v-maps-backend.loadbalancer.server.port=8000"
+      
+      # Strip prefix middleware - remove /vmaps da URL antes de enviar ao backend
+      - "traefik.http.middlewares.v-maps-strip-prefix.stripprefix.prefixes=/vmaps"
+      
+      # CORS headers
+      - "traefik.http.middlewares.v-maps-backend-cors.headers.accessControlAllowMethods=GET,OPTIONS,POST,PUT,PATCH,DELETE"
+      - "traefik.http.middlewares.v-maps-backend-cors.headers.accessControlAllowHeaders=Origin,X-Requested-With,Content-Type,Accept,Authorization"
+      - "traefik.http.middlewares.v-maps-backend-cors.headers.accessControlAllowOriginList=http://localhost:8080,http://localhost:5173,https://client.felippe-91e.workers.dev"
+      - "traefik.http.middlewares.v-maps-backend-cors.headers.accessControlAllowCredentials=true"
+      - "traefik.http.middlewares.v-maps-backend-cors.headers.addVaryHeader=true"
     volumes:
       - v-maps-data:/app/data
     networks:
       - minha_rede
     deploy:
-      mode: replicated
-      replicas: 1
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.v-maps-backend.rule=Host(`tsapi.ciano.io`)"
-        - "traefik.http.routers.v-maps-backend.entrypoints=websecure"
-        - "traefik.http.routers.v-maps-backend.tls.certresolver=letsencrypt"
-        - "traefik.http.services.v-maps-backend.loadbalancer.server.port=8000"
       restart_policy:
         condition: on-failure
         delay: 5s
         max_attempts: 3
+        window: 30s
+      mode: replicated
+      replicas: 1
 
 volumes:
   v-maps-data:
@@ -43,3 +56,4 @@ volumes:
 networks:
   minha_rede:
     external: true
+    name: minha_rede
