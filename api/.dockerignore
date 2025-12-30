@@ -1,0 +1,67 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker
+Dockerfile
+docker-compose*.yaml
+.dockerignore
+
+# Alembic versions (se quiser incluir, remova esta linha)
+# alembic/versions/
+
+# SQLite database (desenvolvimento)
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads (será volume separado)
+uploads/
+
+# Logs
+*.log
+
+# Misc
+.DS_Store
+Thumbs.db
+*.md
+!README.md

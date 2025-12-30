@@ -25,6 +25,9 @@ class PlaceResponse(PlaceBase):
     id: str
     map_id: str
     created_by: str
+    creator_color: str = "blue"
+    creator_username: str | None = None
+    creator_avatar_url: str | None = None
     created_at: datetime
     updated_at: datetime
     

@@ -17,6 +17,7 @@ class Map(Base):
     icon: Mapped[str] = mapped_column(String(50), default="mappin")
     color: Mapped[str] = mapped_column(String(50), default="teal")
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)  # Visível no perfil
     created_by: Mapped[str] = mapped_column(
         String(36), 
         ForeignKey("users.id", ondelete="CASCADE"),

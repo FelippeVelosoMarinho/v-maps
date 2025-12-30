@@ -30,6 +30,7 @@ class Place(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False
     )
+    creator_color: Mapped[str] = mapped_column(String(20), default="blue")  # Cor do marcador
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, 

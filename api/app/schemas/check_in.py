@@ -28,3 +28,6 @@ class CheckInWithDetails(CheckInResponse):
     profile: ProfileResponse | None = None
     place_name: str | None = None
     map_id: str | None = None
+    likes_count: int = 0
+    comments_count: int = 0
+    is_liked: bool = False

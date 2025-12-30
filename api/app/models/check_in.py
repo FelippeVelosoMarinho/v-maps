@@ -34,3 +34,14 @@ class CheckIn(Base):
     # Relationships
     place: Mapped["Place"] = relationship("Place", back_populates="check_ins")
     user: Mapped["User"] = relationship("User", back_populates="check_ins")
+    likes: Mapped[list["CheckInLike"]] = relationship(
+        "CheckInLike",
+        back_populates="check_in",
+        cascade="all, delete-orphan"
+    )
+    comments: Mapped[list["CheckInComment"]] = relationship(
+        "CheckInComment",
+        back_populates="check_in",
+        cascade="all, delete-orphan",
+        order_by="CheckInComment.created_at"
+    )

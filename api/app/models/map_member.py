@@ -26,6 +26,7 @@ class MapMember(Base):
         index=True
     )
     role: Mapped[str] = mapped_column(String(20), default="member")  # owner, admin, member
+    color: Mapped[str] = mapped_column(String(20), default="blue")  # Cor do marcador do membro
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     # Relationships

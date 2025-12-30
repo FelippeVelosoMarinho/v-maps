@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func, and_
 from datetime import datetime
 import os
 import uuid
@@ -10,6 +10,7 @@ from app.models.user import User
 from app.models.place import Place
 from app.models.check_in import CheckIn
 from app.models.profile import Profile
+from app.models.social import CheckInLike, CheckInComment
 from app.schemas.check_in import CheckInCreate, CheckInResponse, CheckInWithDetails
 from app.utils.dependencies import get_current_user
 from app.config import settings
@@ -66,6 +67,29 @@ async def get_check_ins(
         )
         place = result.scalar_one_or_none()
         
+        # Contar likes
+        likes_result = await db.execute(
+            select(func.count(CheckInLike.id)).where(CheckInLike.check_in_id == ci.id)
+        )
+        likes_count = likes_result.scalar() or 0
+        
+        # Contar comments
+        comments_result = await db.execute(
+            select(func.count(CheckInComment.id)).where(CheckInComment.check_in_id == ci.id)
+        )
+        comments_count = comments_result.scalar() or 0
+        
+        # Verificar se o usuário atual curtiu
+        is_liked_result = await db.execute(
+            select(CheckInLike).where(
+                and_(
+                    CheckInLike.check_in_id == ci.id,
+                    CheckInLike.user_id == current_user.id
+                )
+            )
+        )
+        is_liked = is_liked_result.scalar_one_or_none() is not None
+        
         check_ins_with_details.append(CheckInWithDetails(
             id=ci.id,
             place_id=ci.place_id,
@@ -77,7 +101,10 @@ async def get_check_ins(
             created_at=ci.created_at,
             profile=profile,
             place_name=place.name if place else None,
-            map_id=place.map_id if place else None
+            map_id=place.map_id if place else None,
+            likes_count=likes_count,
+            comments_count=comments_count,
+            is_liked=is_liked
         ))
     
     return check_ins_with_details

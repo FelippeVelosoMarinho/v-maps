@@ -6,7 +6,7 @@ uvicorn[standard]>=0.30.0
 sqlalchemy>=2.0.30
 alembic>=1.13.0
 asyncpg>=0.29.0
-# psycopg2-binary removido - não necessário para async, asyncpg é suficiente
+aiosqlite>=0.19.0
 
 # Authentication
 python-jose[cryptography]>=3.3.0

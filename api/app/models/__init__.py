@@ -8,7 +8,8 @@ from app.models.chat_message import ChatMessage
 from app.models.map_member import MapMember
 from app.models.map_invite import MapInvite
 from app.models.friendship import Friendship, FriendshipStatus
-from app.models.group import Group, GroupMember, GroupMap
+from app.models.group import Group, GroupMember, GroupMap, GroupInvite
+from app.models.social import CheckInLike, CheckInComment
 
 __all__ = [
     "User",
@@ -24,4 +25,7 @@ __all__ = [
     "Group",
     "GroupMember",
     "GroupMap",
+    "GroupInvite",
+    "CheckInLike",
+    "CheckInComment",
 ]

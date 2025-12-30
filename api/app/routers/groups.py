@@ -3,11 +3,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from typing import List
+from datetime import datetime
 from app.database import get_db
 from app.models.user import User
 from app.models.profile import Profile
 from app.models.map import Map
-from app.models.group import Group, GroupMember, GroupMap
+from app.models.group import Group, GroupMember, GroupMap, GroupInvite
 from app.schemas.group import (
     GroupCreate,
     GroupUpdate,
@@ -19,6 +20,9 @@ from app.schemas.group import (
     GroupMemberInfo,
     GroupMapInfo,
     ShareMapWithGroup,
+    GroupInviteCreate,
+    GroupInviteResponse,
+    GroupInviteAction,
 )
 from app.utils.dependencies import get_current_user
 
@@ -35,6 +39,7 @@ async def create_group(
 ):
     """
     Create a new group. The creator is automatically added as owner.
+    Other members receive invitations.
     """
     # Create group
     group = Group(
@@ -54,7 +59,7 @@ async def create_group(
     )
     db.add(owner_member)
     
-    # Add other members if provided
+    # Send invites to other members
     for member_id in group_data.member_ids:
         if member_id != current_user.id:
             # Check if user exists
@@ -63,12 +68,14 @@ async def create_group(
             )
             user = user_result.scalar_one_or_none()
             if user:
-                member = GroupMember(
+                # Create invite
+                invite = GroupInvite(
                     group_id=group.id,
-                    user_id=member_id,
-                    role="member"
+                    invited_user_id=member_id,
+                    invited_by_id=current_user.id,
+                    status="pending"
                 )
-                db.add(member)
+                db.add(invite)
     
     await db.commit()
     
@@ -245,6 +252,61 @@ async def delete_group(
 
 
 # ============ Member Management ============
+
+@router.get("/{group_id}/members", response_model=list[GroupMemberInfo])
+async def get_group_members(
+    group_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all members of a group. Only members can see the member list.
+    """
+    # Check if group exists
+    group_result = await db.execute(
+        select(Group).where(Group.id == group_id)
+    )
+    group = group_result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group not found"
+        )
+    
+    # Check if user is a member
+    member_check = await db.execute(
+        select(GroupMember)
+        .where(GroupMember.group_id == group_id)
+        .where(GroupMember.user_id == current_user.id)
+    )
+    if not member_check.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You must be a member to view the member list"
+        )
+    
+    # Get all members with profiles
+    members_result = await db.execute(
+        select(GroupMember, Profile)
+        .outerjoin(Profile, GroupMember.user_id == Profile.user_id)
+        .where(GroupMember.group_id == group_id)
+        .order_by(GroupMember.joined_at)
+    )
+    
+    members = []
+    for member, profile in members_result.all():
+        members.append(GroupMemberInfo(
+            id=member.id,
+            user_id=member.user_id,
+            role=member.role,
+            joined_at=member.joined_at,
+            username=profile.username if profile else None,
+            avatar_url=profile.avatar_url if profile else None
+        ))
+    
+    return members
+
 
 @router.post("/{group_id}/members", response_model=GroupMemberInfo, status_code=status.HTTP_201_CREATED)
 async def add_member(
@@ -441,6 +503,51 @@ async def leave_group(
 
 # ============ Map Sharing ============
 
+@router.get("/{group_id}/maps", response_model=List[GroupMapInfo])
+async def get_group_maps(
+    group_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all maps shared with this group.
+    User must be a member of the group.
+    """
+    # Check if user is a member
+    member_result = await db.execute(
+        select(GroupMember)
+        .where(GroupMember.group_id == group_id)
+        .where(GroupMember.user_id == current_user.id)
+    )
+    if not member_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not a member of this group"
+        )
+    
+    # Get shared maps
+    result = await db.execute(
+        select(GroupMap, Map, Profile)
+        .join(Map, Map.id == GroupMap.map_id)
+        .outerjoin(Profile, Profile.user_id == GroupMap.shared_by)
+        .where(GroupMap.group_id == group_id)
+    )
+    rows = result.all()
+    
+    return [
+        GroupMapInfo(
+            id=group_map.id,
+            map_id=map_obj.id,
+            map_name=map_obj.name,
+            map_icon=map_obj.icon,
+            shared_by=group_map.shared_by,
+            shared_by_username=profile.username if profile else None,
+            shared_at=group_map.shared_at
+        )
+        for group_map, map_obj, profile in rows
+    ]
+
+
 @router.post("/{group_id}/maps", response_model=GroupMapInfo, status_code=status.HTTP_201_CREATED)
 async def share_map_with_group(
     group_id: str,
@@ -563,6 +670,296 @@ async def unshare_map(
             )
     
     await db.delete(share)
+    await db.commit()
+
+
+# ============ Invites ============
+
+@router.get("/invites/pending", response_model=List[GroupInviteResponse])
+async def get_my_pending_invites(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all pending group invites for the current user.
+    """
+    result = await db.execute(
+        select(GroupInvite)
+        .where(GroupInvite.invited_user_id == current_user.id)
+        .where(GroupInvite.status == "pending")
+    )
+    invites = result.scalars().all()
+    
+    invite_responses = []
+    for invite in invites:
+        # Get group
+        group_result = await db.execute(
+            select(Group).where(Group.id == invite.group_id)
+        )
+        group = group_result.scalar_one_or_none()
+        
+        if not group:
+            continue
+        
+        # Get inviter profile
+        profile_result = await db.execute(
+            select(Profile).where(Profile.user_id == invite.invited_by_id)
+        )
+        profile = profile_result.scalar_one_or_none()
+        
+        invite_responses.append(GroupInviteResponse(
+            id=invite.id,
+            group_id=group.id,
+            group_name=group.name,
+            group_icon=group.icon,
+            invited_user_id=invite.invited_user_id,
+            invited_by_id=invite.invited_by_id,
+            invited_by_username=profile.username if profile else None,
+            invited_by_avatar=profile.avatar_url if profile else None,
+            status=invite.status,
+            created_at=invite.created_at,
+            responded_at=invite.responded_at
+        ))
+    
+    return invite_responses
+
+
+@router.post("/{group_id}/invites", response_model=GroupInviteResponse, status_code=status.HTTP_201_CREATED)
+async def invite_to_group(
+    group_id: str,
+    invite_data: GroupInviteCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Invite a user to the group. Only owner/admins can invite.
+    """
+    # Check if group exists
+    group_result = await db.execute(
+        select(Group).where(Group.id == group_id)
+    )
+    group = group_result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group not found"
+        )
+    
+    # Check if user is owner or admin
+    member_result = await db.execute(
+        select(GroupMember)
+        .where(GroupMember.group_id == group_id)
+        .where(GroupMember.user_id == current_user.id)
+        .where(GroupMember.role.in_(["owner", "admin"]))
+    )
+    if not member_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You don't have permission to invite members"
+        )
+    
+    # Check if user to invite exists
+    user_result = await db.execute(
+        select(User).where(User.id == invite_data.user_id)
+    )
+    user = user_result.scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    # Check if already a member
+    existing_member = await db.execute(
+        select(GroupMember)
+        .where(GroupMember.group_id == group_id)
+        .where(GroupMember.user_id == invite_data.user_id)
+    )
+    if existing_member.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already a member of this group"
+        )
+    
+    # Check if there's already a pending invite
+    existing_invite = await db.execute(
+        select(GroupInvite)
+        .where(GroupInvite.group_id == group_id)
+        .where(GroupInvite.invited_user_id == invite_data.user_id)
+        .where(GroupInvite.status == "pending")
+    )
+    if existing_invite.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="There's already a pending invite for this user"
+        )
+    
+    # Create invite
+    invite = GroupInvite(
+        group_id=group_id,
+        invited_user_id=invite_data.user_id,
+        invited_by_id=current_user.id,
+        status="pending"
+    )
+    db.add(invite)
+    await db.commit()
+    await db.refresh(invite)
+    
+    # Get inviter profile
+    profile_result = await db.execute(
+        select(Profile).where(Profile.user_id == current_user.id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    
+    return GroupInviteResponse(
+        id=invite.id,
+        group_id=group.id,
+        group_name=group.name,
+        group_icon=group.icon,
+        invited_user_id=invite.invited_user_id,
+        invited_by_id=invite.invited_by_id,
+        invited_by_username=profile.username if profile else None,
+        invited_by_avatar=profile.avatar_url if profile else None,
+        status=invite.status,
+        created_at=invite.created_at,
+        responded_at=invite.responded_at
+    )
+
+
+@router.post("/invites/{invite_id}/respond", response_model=GroupInviteResponse)
+async def respond_to_invite(
+    invite_id: str,
+    action_data: GroupInviteAction,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Accept or reject a group invite.
+    """
+    # Get invite
+    result = await db.execute(
+        select(GroupInvite).where(GroupInvite.id == invite_id)
+    )
+    invite = result.scalar_one_or_none()
+    
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found"
+        )
+    
+    if invite.invited_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invite is not for you"
+        )
+    
+    if invite.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invite has already been responded to"
+        )
+    
+    if action_data.action not in ["accept", "reject"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Action must be 'accept' or 'reject'"
+        )
+    
+    # Get group
+    group_result = await db.execute(
+        select(Group).where(Group.id == invite.group_id)
+    )
+    group = group_result.scalar_one_or_none()
+    
+    if not group:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group no longer exists"
+        )
+    
+    # Update invite
+    invite.status = "accepted" if action_data.action == "accept" else "rejected"
+    invite.responded_at = datetime.utcnow()
+    
+    # If accepted, add as member
+    if action_data.action == "accept":
+        member = GroupMember(
+            group_id=invite.group_id,
+            user_id=current_user.id,
+            role="member"
+        )
+        db.add(member)
+    
+    await db.commit()
+    await db.refresh(invite)
+    
+    # Get inviter profile
+    profile_result = await db.execute(
+        select(Profile).where(Profile.user_id == invite.invited_by_id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    
+    return GroupInviteResponse(
+        id=invite.id,
+        group_id=group.id,
+        group_name=group.name,
+        group_icon=group.icon,
+        invited_user_id=invite.invited_user_id,
+        invited_by_id=invite.invited_by_id,
+        invited_by_username=profile.username if profile else None,
+        invited_by_avatar=profile.avatar_url if profile else None,
+        status=invite.status,
+        created_at=invite.created_at,
+        responded_at=invite.responded_at
+    )
+
+
+@router.delete("/invites/{invite_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_invite(
+    invite_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Cancel a pending invite. Only the inviter or group owner can cancel.
+    """
+    # Get invite
+    result = await db.execute(
+        select(GroupInvite).where(GroupInvite.id == invite_id)
+    )
+    invite = result.scalar_one_or_none()
+    
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found"
+        )
+    
+    if invite.status != "pending":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only pending invites can be cancelled"
+        )
+    
+    # Check permissions
+    is_inviter = invite.invited_by_id == current_user.id
+    if not is_inviter:
+        # Check if owner
+        group_result = await db.execute(
+            select(Group).where(Group.id == invite.group_id)
+        )
+        group = group_result.scalar_one_or_none()
+        
+        if not group or group.owner_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to cancel this invite"
+            )
+    
+    await db.delete(invite)
     await db.commit()
 
 

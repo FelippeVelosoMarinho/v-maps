@@ -12,7 +12,7 @@ class GroupBase(BaseModel):
 
 class GroupCreate(GroupBase):
     """Schema for creating a group."""
-    member_ids: list[str] = []  # Optional list of user IDs to add as members
+    member_ids: list[str] = []  # Optional list of user IDs to invite
 
 
 class GroupUpdate(BaseModel):
@@ -89,3 +89,33 @@ class GroupMemberUpdate(BaseModel):
 class ShareMapWithGroup(BaseModel):
     """Schema for sharing a map with a group."""
     map_id: str
+
+
+# ============ Invite Schemas ============
+
+class GroupInviteCreate(BaseModel):
+    """Schema for creating a group invite."""
+    user_id: str
+
+
+class GroupInviteResponse(BaseModel):
+    """Schema for group invite response."""
+    id: str
+    group_id: str
+    group_name: str
+    group_icon: str
+    invited_user_id: str
+    invited_by_id: str
+    invited_by_username: str | None = None
+    invited_by_avatar: str | None = None
+    status: str
+    created_at: datetime
+    responded_at: datetime | None = None
+    
+    class Config:
+        from_attributes = True
+
+
+class GroupInviteAction(BaseModel):
+    """Schema for accepting/rejecting an invite."""
+    action: str  # "accept" or "reject"

@@ -79,3 +79,20 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
+    group_invites_received: Mapped[list["GroupInvite"]] = relationship(
+        "GroupInvite",
+        foreign_keys="GroupInvite.invited_user_id",
+        back_populates="invited_user",
+        cascade="all, delete-orphan"
+    )
+    # Social interactions
+    check_in_likes: Mapped[list["CheckInLike"]] = relationship(
+        "CheckInLike",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    check_in_comments: Mapped[list["CheckInComment"]] = relationship(
+        "CheckInComment",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )

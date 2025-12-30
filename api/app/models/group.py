@@ -42,6 +42,11 @@ class Group(Base):
         back_populates="group",
         cascade="all, delete-orphan"
     )
+    invites: Mapped[list["GroupInvite"]] = relationship(
+        "GroupInvite",
+        back_populates="group",
+        cascade="all, delete-orphan"
+    )
 
 
 class GroupMember(Base):
@@ -105,3 +110,39 @@ class GroupMap(Base):
     group: Mapped["Group"] = relationship("Group", back_populates="shared_maps")
     map: Mapped["Map"] = relationship("Map", back_populates="group_shares")
     shared_by_user: Mapped["User"] = relationship("User")
+
+
+class GroupInvite(Base):
+    """Model for group invitations."""
+    __tablename__ = "group_invites"
+    
+    id: Mapped[str] = mapped_column(
+        String(36), 
+        primary_key=True, 
+        default=lambda: str(uuid.uuid4())
+    )
+    group_id: Mapped[str] = mapped_column(
+        String(36), 
+        ForeignKey("groups.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    invited_user_id: Mapped[str] = mapped_column(
+        String(36), 
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    invited_by_id: Mapped[str] = mapped_column(
+        String(36), 
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, accepted, rejected
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    
+    # Relationships
+    group: Mapped["Group"] = relationship("Group", back_populates="invites")
+    invited_user: Mapped["User"] = relationship("User", foreign_keys=[invited_user_id], back_populates="group_invites_received")
+    invited_by: Mapped["User"] = relationship("User", foreign_keys=[invited_by_id])

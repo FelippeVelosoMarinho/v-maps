@@ -7,10 +7,11 @@ class MapBase(BaseModel):
     icon: str = "mappin"
     color: str = "teal"
     is_shared: bool = False
+    is_public: bool = False  # Visível no perfil público
 
 
 class MapCreate(MapBase):
-    pass
+    group_id: str | None = None  # Optional: create map directly for a group
 
 
 class MapUpdate(BaseModel):
@@ -18,6 +19,14 @@ class MapUpdate(BaseModel):
     icon: str | None = None
     color: str | None = None
     is_shared: bool | None = None
+    is_public: bool | None = None
+
+
+class MapGroupInfo(BaseModel):
+    """Info about a group the map is shared with."""
+    group_id: str
+    group_name: str
+    group_icon: str
 
 
 class MapResponse(MapBase):
@@ -26,6 +35,7 @@ class MapResponse(MapBase):
     created_at: datetime
     updated_at: datetime
     location_count: int = 0
+    shared_with_groups: list[MapGroupInfo] = []  # Groups this map is shared with
     
     class Config:
         from_attributes = True

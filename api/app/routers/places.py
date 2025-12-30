@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_
+from sqlalchemy.orm import selectinload
+from app.models.profile import Profile
 from math import radians, cos, sin, asin, sqrt
 from app.database import get_db
 from app.models.user import User
@@ -77,6 +79,31 @@ async def create_place(
     """
     await check_map_access(place_data.map_id, current_user.id, db)
     
+    # Buscar a cor do usuário para este mapa
+    user_color = "blue"  # Cor padrão
+    
+    # Se é o dono do mapa
+    result = await db.execute(
+        select(Map).where(Map.id == place_data.map_id)
+    )
+    map_obj = result.scalar_one_or_none()
+    
+    if map_obj and map_obj.created_by == current_user.id:
+        user_color = map_obj.color  # Usa a cor do mapa para o dono
+    else:
+        # Buscar a cor do membro
+        result = await db.execute(
+            select(MapMember).where(
+                and_(
+                    MapMember.map_id == place_data.map_id,
+                    MapMember.user_id == current_user.id
+                )
+            )
+        )
+        member = result.scalar_one_or_none()
+        if member:
+            user_color = member.color
+    
     new_place = Place(
         map_id=place_data.map_id,
         name=place_data.name,
@@ -85,7 +112,8 @@ async def create_place(
         lng=place_data.lng,
         address=place_data.address,
         google_place_id=place_data.google_place_id,
-        created_by=current_user.id
+        created_by=current_user.id,
+        creator_color=user_color
     )
     db.add(new_place)
     await db.commit()

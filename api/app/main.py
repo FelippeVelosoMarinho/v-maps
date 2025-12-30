@@ -15,6 +15,7 @@ from app.routers import (
     chat_router,
     friends_router,
     groups_router,
+    social_router,
 )
 
 
@@ -70,6 +71,7 @@ app.include_router(check_ins_router)
 app.include_router(chat_router)
 app.include_router(friends_router)
 app.include_router(groups_router)
+app.include_router(social_router)
 
 
 @app.get("/")
