@@ -4,10 +4,8 @@ services:
   v-maps-backend:
     image: v-maps-backend:1.0.0
     environment:
-      # Database - ajuste conforme seu banco
+      # Database - usando SQLite para simplicidade
       DATABASE_URL: sqlite+aiosqlite:///./data/vmaps.db
-      # Para PostgreSQL externo:
-      # DATABASE_URL: postgresql+asyncpg://user:password@host:5432/vmaps
       
       # JWT - IMPORTANTE: altere em produção!
       SECRET_KEY: ${SECRET_KEY:-sua-chave-secreta-muito-segura-aqui}
@@ -23,7 +21,7 @@ services:
     volumes:
       - v-maps-data:/app/data
     networks:
-      - traefik-public
+      - minha_rede
     deploy:
       mode: replicated
       replicas: 1
@@ -43,5 +41,5 @@ volumes:
     driver: local
 
 networks:
-  traefik-public:
+  minha_rede:
     external: true
