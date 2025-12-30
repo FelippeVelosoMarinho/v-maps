@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  v-maps-backend:
+    image: v-maps-backend:1.0.0
+    environment:
+      # Database - ajuste conforme seu banco
+      DATABASE_URL: sqlite+aiosqlite:///./data/vmaps.db
+      # Para PostgreSQL externo:
+      # DATABASE_URL: postgresql+asyncpg://user:password@host:5432/vmaps
+      
+      # JWT - IMPORTANTE: altere em produção!
+      SECRET_KEY: ${SECRET_KEY:-sua-chave-secreta-muito-segura-aqui}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+      
+      # CORS - URL do frontend
+      FRONTEND_URL: https://client.felippe-91e.workers.dev
+      
+      # Uploads
+      UPLOAD_DIR: /app/data/uploads
+    volumes:
+      - v-maps-data:/app/data
+    networks:
+      - traefik-public
+    deploy:
+      mode: replicated
+      replicas: 1
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.v-maps-backend.rule=Host(`tsapi.ciano.io`)"
+        - "traefik.http.routers.v-maps-backend.entrypoints=websecure"
+        - "traefik.http.routers.v-maps-backend.tls.certresolver=letsencrypt"
+        - "traefik.http.services.v-maps-backend.loadbalancer.server.port=8000"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+volumes:
+  v-maps-data:
+    driver: local
+
+networks:
+  traefik-public:
+    external: true

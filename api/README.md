@@ -103,14 +103,42 @@ VERSION=1.0.0
 
 2. **Build da imagem Docker com versão:**
    ```bash
+   cd api
    docker build -t v-maps-backend:1.0.0 .
    ```
 
-3. **Atualize no Portainer:**
+3. **Deploy via Docker Stack (primeira vez):**
+   ```bash
+   # Criar o stack no Swarm
+   docker stack deploy -c docker-stack.yaml v-maps-backend
+   
+   # Verificar se está rodando
+   docker service ls | grep v-maps
+   ```
+
+4. **Atualizar serviço existente (novas versões):**
+   ```bash
+   # Build nova versão
+   docker build -t v-maps-backend:1.0.1 .
+   
+   # Atualizar o serviço
+   docker service update --image v-maps-backend:1.0.1 v-maps-backend_v-maps-backend
+   ```
+
+5. **Ou via Portainer:**
    - Acesse `tsportainer.ciano.io`
-   - Abra o container desejado
-   - Em **Edit**, altere a versão da imagem para a nova (ex: `1.0.0`)
-   - Clique em **Rerun jobs**
+   - Vá em **Stacks** → **Add stack**
+   - Nome: `v-maps-backend`
+   - Cole o conteúdo de `docker-stack.yaml`
+   - Clique em **Deploy the stack**
+
+### Atualizar via Portainer
+
+1. Faça o build da nova imagem no servidor
+2. No Portainer, vá em **Services** → `v-maps-backend_v-maps-backend`
+3. Clique em **Update the service**
+4. Altere a imagem para a nova versão (ex: `v-maps-backend:1.0.1`)
+5. Clique em **Update**
 
 ### Script de Deploy (Linux/Mac)
 
