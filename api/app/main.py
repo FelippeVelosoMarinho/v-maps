@@ -16,6 +16,8 @@ from app.routers import (
     friends_router,
     groups_router,
     social_router,
+    trips_router,
+    avatars_router,
 )
 
 
@@ -76,6 +78,8 @@ app.include_router(chat_router)
 app.include_router(friends_router)
 app.include_router(groups_router)
 app.include_router(social_router)
+app.include_router(trips_router)
+app.include_router(avatars_router)
 
 
 @app.get("/")

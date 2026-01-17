@@ -8,6 +8,8 @@ from app.routers.chat import router as chat_router
 from app.routers.friends import router as friends_router
 from app.routers.groups import router as groups_router
 from app.routers.social import router as social_router
+from app.routers.trips import router as trips_router
+from app.routers.avatars import router as avatars_router
 
 __all__ = [
     "auth_router",
@@ -19,4 +21,6 @@ __all__ = [
     "friends_router",
     "groups_router",
     "social_router",
+    "trips_router",
+    "avatars_router",
 ]

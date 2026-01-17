@@ -540,7 +540,17 @@ async def get_map_members_with_colors(
     )
     
     members = []
+    
+    # Adicionar o criador do mapa primeiro (se não for membro explícito)
+    owner_result = await db.execute(
+        select(Profile).where(Profile.user_id == map_obj.created_by)
+    )
+    owner_profile = owner_result.scalar_one_or_none()
+    
+    # Verificar se o owner já está na lista de membros
+    member_ids = []
     for member, profile in result.all():
+        member_ids.append(member.user_id)
         members.append(MapMemberWithColor(
             id=member.id,
             user_id=member.user_id,
@@ -549,6 +559,18 @@ async def get_map_members_with_colors(
             role=member.role,
             color=member.color,
             joined_at=member.joined_at
+        ))
+    
+    # Se o owner não está na lista de membros, adicionar
+    if map_obj.created_by not in member_ids:
+        members.insert(0, MapMemberWithColor(
+            id=map_obj.id,  # Usar o ID do mapa como ID do "membro" owner
+            user_id=map_obj.created_by,
+            username=owner_profile.username if owner_profile else None,
+            avatar_url=owner_profile.avatar_url if owner_profile else None,
+            role="owner",
+            color="#3B82F6",  # Cor padrão para o owner
+            joined_at=map_obj.created_at
         ))
     
     return members

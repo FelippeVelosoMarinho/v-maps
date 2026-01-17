@@ -96,3 +96,20 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
+    # Trips
+    trips: Mapped[list["Trip"]] = relationship(
+        "Trip",
+        back_populates="creator",
+        cascade="all, delete-orphan"
+    )
+    trip_participations: Mapped[list["TripParticipant"]] = relationship(
+        "TripParticipant",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    avatar: Mapped["Avatar"] = relationship(
+        "Avatar",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False  # One-to-one relationship
+    )
