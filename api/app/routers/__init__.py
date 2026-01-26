@@ -9,6 +9,7 @@ from app.routers.friends import router as friends_router
 from app.routers.groups import router as groups_router
 from app.routers.social import router as social_router
 from app.routers.trips import router as trips_router
+from app.routers.notifications import router as notifications_router
 from app.routers.avatars import router as avatars_router
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "social_router",
     "trips_router",
     "avatars_router",
+    "notifications_router",
 ]

@@ -12,10 +12,14 @@ class TripLocationResponse(BaseModel):
     recorded_at: datetime
 
 
+from app.schemas.user import UserWithProfile
+
 class TripParticipantResponse(BaseModel):
     id: str
     user_id: str
     joined_at: datetime
+    status: str
+    user: Optional[UserWithProfile] = None
 
 
 class TripCreate(BaseModel):
@@ -23,6 +27,7 @@ class TripCreate(BaseModel):
     description: Optional[str] = ""
     map_id: str
     participant_ids: Optional[list[str]] = []
+    invite_all: bool = False
 
 
 class TripUpdate(BaseModel):

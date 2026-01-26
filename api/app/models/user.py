@@ -113,3 +113,19 @@ class User(Base):
         cascade="all, delete-orphan",
         uselist=False  # One-to-one relationship
     )
+    # User Social (Favorites and Wishlist)
+    favorite_places: Mapped[list["FavoritePlace"]] = relationship(
+        "FavoritePlace",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    wish_list_places: Mapped[list["WishListPlace"]] = relationship(
+        "WishListPlace",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
+    notifications: Mapped[list["Notification"]] = relationship(
+        "Notification",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )

@@ -1,4 +1,5 @@
 # Models package
+from app.database import Base
 from app.models.user import User
 from app.models.profile import Profile
 from app.models.map import Map
@@ -10,8 +11,10 @@ from app.models.map_invite import MapInvite
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.group import Group, GroupMember, GroupMap, GroupInvite
 from app.models.social import CheckInLike, CheckInComment
+from app.models.user_social import FavoritePlace, WishListPlace
 from app.models.trip import Trip, TripParticipant, TripLocation
 from app.models.avatar import Avatar
+from app.models.notification import Notification
 
 __all__ = [
     "User",
@@ -30,8 +33,12 @@ __all__ = [
     "GroupInvite",
     "CheckInLike",
     "CheckInComment",
+    "FavoritePlace",
+    "WishListPlace",
     "Trip",
     "TripParticipant",
     "TripLocation",
     "Avatar",
+    "Notification",
+    "Base",
 ]

@@ -103,6 +103,8 @@ class PublicProfileResponse(BaseModel):
     map_count: int = 0
     check_in_count: int = 0
     friend_count: int = 0
+    favorite_count: int = 0
+    wish_list_count: int = 0
     
     # Mapas públicos (somente se amigo ou público)
     public_maps: list[PublicMapResponse] = []
@@ -114,6 +116,24 @@ class PublicProfileResponse(BaseModel):
     is_friend: bool = False
     friendship_status: str | None = None  # pending, accepted, rejected
     
+    class Config:
+        from_attributes = True
+
+
+# =====================
+# Favorite and Wishlist Schemas
+# =====================
+
+class UserPlaceInteractionCreate(BaseModel):
+    place_id: str
+
+
+class UserPlaceInteractionResponse(BaseModel):
+    id: str
+    user_id: str
+    place_id: str
+    created_at: datetime
+
     class Config:
         from_attributes = True
 

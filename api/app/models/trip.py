@@ -69,6 +69,7 @@ class TripParticipant(Base):
         nullable=False
     )
     joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    status: Mapped[str] = mapped_column(String(20), default="invited")  # invited, accepted, declined, left
     
     # Relationships
     trip: Mapped["Trip"] = relationship("Trip", back_populates="participants")

@@ -14,6 +14,9 @@ from app.models.check_in import CheckIn
 from app.models.social import CheckInLike, CheckInComment
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.map_member import MapMember
+from app.models.group import GroupMember, GroupMap
+from app.models.user_social import FavoritePlace, WishListPlace
+from app.schemas.check_in import CheckInWithDetails
 from app.schemas.social import (
     CheckInLikeResponse,
     CheckInCommentCreate,
@@ -24,8 +27,11 @@ from app.schemas.social import (
     PublicCheckInResponse,
     MapMemberWithColor,
     PlaceWithCreator,
+    UserPlaceInteractionCreate,
+    UserPlaceInteractionResponse,
 )
 from app.utils.dependencies import get_current_user
+from app.utils.permissions import check_map_access
 
 router = APIRouter(prefix="/social", tags=["Social"])
 
@@ -308,6 +314,177 @@ async def delete_comment(
 
 
 # =====================
+# Social Feed
+# =====================
+
+@router.get("/feed", response_model=list[CheckInWithDetails])
+async def get_social_feed(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obter feed social (check-ins de amigos) em ordem cronológica"""
+    # Buscar IDs dos amigos
+    friends_result = await db.execute(
+        select(Friendship).where(
+            and_(
+                Friendship.status == FriendshipStatus.ACCEPTED,
+                or_(
+                    Friendship.requester_id == current_user.id,
+                    Friendship.addressee_id == current_user.id
+                )
+            )
+        )
+    )
+    friendships = friends_result.scalars().all()
+    friend_ids = []
+    for f in friendships:
+        friend_ids.append(f.addressee_id if f.requester_id == current_user.id else f.requester_id)
+    
+    # Incluir o próprio usuário no feed
+    user_ids = friend_ids + [current_user.id]
+    
+    # Buscar check-ins desses usuários
+    result = await db.execute(
+        select(CheckIn)
+        .where(CheckIn.user_id.in_(user_ids))
+        .order_by(CheckIn.visited_at.desc())
+        .limit(limit)
+    )
+    check_ins = result.scalars().all()
+    
+    # Carregar detalhes (mesma lógica do router de check-ins)
+    feed = []
+    for ci in check_ins:
+        # Perfil
+        p_result = await db.execute(select(Profile).where(Profile.user_id == ci.user_id))
+        profile = p_result.scalar_one_or_none()
+        
+        # Lugar
+        pl_result = await db.execute(select(Place).where(Place.id == ci.place_id))
+        place = pl_result.scalar_one_or_none()
+        
+        # Likes
+        l_result = await db.execute(select(func.count(CheckInLike.id)).where(CheckInLike.check_in_id == ci.id))
+        likes_count = l_result.scalar() or 0
+        
+        # Comments
+        c_result = await db.execute(select(func.count(CheckInComment.id)).where(CheckInComment.check_in_id == ci.id))
+        comments_count = c_result.scalar() or 0
+        
+        # Is Liked
+        il_result = await db.execute(
+            select(CheckInLike).where(
+                and_(CheckInLike.check_in_id == ci.id, CheckInLike.user_id == current_user.id)
+            )
+        )
+        is_liked = il_result.scalar_one_or_none() is not None
+        
+        feed.append(CheckInWithDetails(
+            id=ci.id,
+            place_id=ci.place_id,
+            user_id=ci.user_id,
+            comment=ci.comment,
+            rating=ci.rating,
+            photo_url=ci.photo_url,
+            visited_at=ci.visited_at,
+            created_at=ci.created_at,
+            profile=profile,
+            place_name=place.name if place else None,
+            map_id=place.map_id if place else None,
+            likes_count=likes_count,
+            comments_count=comments_count,
+            is_liked=is_liked
+        ))
+    
+    return feed
+
+
+# =====================
+# Favorites and Wishlist
+# =====================
+
+@router.post("/favorites", response_model=UserPlaceInteractionResponse)
+async def add_favorite(
+    data: UserPlaceInteractionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verificar se já é favorito
+    existing = await db.execute(
+        select(FavoritePlace).where(
+            and_(FavoritePlace.user_id == current_user.id, FavoritePlace.place_id == data.place_id)
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Lugar já está nos favoritos")
+    
+    fav = FavoritePlace(user_id=current_user.id, place_id=data.place_id)
+    db.add(fav)
+    await db.commit()
+    await db.refresh(fav)
+    return fav
+
+
+@router.delete("/favorites/{place_id}", status_code=204)
+async def remove_favorite(
+    place_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(FavoritePlace).where(
+            and_(FavoritePlace.user_id == current_user.id, FavoritePlace.place_id == place_id)
+        )
+    )
+    fav = result.scalar_one_or_none()
+    if not fav:
+        raise HTTPException(status_code=404, detail="Não encontrado nos favoritos")
+    await db.delete(fav)
+    await db.commit()
+
+
+@router.post("/wishlist", response_model=UserPlaceInteractionResponse)
+async def add_to_wishlist(
+    data: UserPlaceInteractionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # Verificar se já está na lista
+    existing = await db.execute(
+        select(WishListPlace).where(
+            and_(WishListPlace.user_id == current_user.id, WishListPlace.place_id == data.place_id)
+        )
+    )
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Lugar já está na lista de desejos")
+    
+    wish = WishListPlace(user_id=current_user.id, place_id=data.place_id)
+    db.add(wish)
+    await db.commit()
+    await db.refresh(wish)
+    return wish
+
+
+@router.delete("/wishlist/{place_id}", status_code=204)
+async def remove_from_wishlist(
+    place_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    result = await db.execute(
+        select(WishListPlace).where(
+            and_(WishListPlace.user_id == current_user.id, WishListPlace.place_id == place_id)
+        )
+    )
+    wish = result.scalar_one_or_none()
+    if not wish:
+        raise HTTPException(status_code=404, detail="Não encontrado na lista de desejos")
+    await db.delete(wish)
+    await db.commit()
+
+
+# =====================
 # Public Profile
 # =====================
 
@@ -384,6 +561,18 @@ async def get_public_profile(
         )
     )
     friend_count = result.scalar() or 0
+
+    # Contar favoritos
+    result = await db.execute(
+        select(func.count(FavoritePlace.id)).where(FavoritePlace.user_id == user_id)
+    )
+    favorite_count = result.scalar() or 0
+
+    # Contar wishlist
+    result = await db.execute(
+        select(func.count(WishListPlace.id)).where(WishListPlace.user_id == user_id)
+    )
+    wish_list_count = result.scalar() or 0
     
     # Buscar mapas públicos (ou todos se for amigo)
     public_maps = []
@@ -475,6 +664,8 @@ async def get_public_profile(
         map_count=map_count,
         check_in_count=check_in_count,
         friend_count=friend_count,
+        favorite_count=favorite_count,
+        wish_list_count=wish_list_count,
         public_maps=public_maps,
         recent_check_ins=recent_check_ins,
         is_friend=is_friend,
@@ -512,46 +703,37 @@ async def get_map_members_with_colors(
             detail="Mapa não encontrado"
         )
     
-    # Verificar se tem acesso (owner ou membro)
-    is_owner = map_obj.created_by == current_user.id
-    
-    result = await db.execute(
-        select(MapMember).where(
-            and_(
-                MapMember.map_id == map_id,
-                MapMember.user_id == current_user.id
-            )
-        )
-    )
-    is_member = result.scalar_one_or_none() is not None
-    
-    if not is_owner and not is_member:
+    # Verificar se tem acesso via shared helper
+    has_access = await check_map_access(db, map_id, current_user.id)
+    if not has_access:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Você não tem acesso a este mapa"
         )
     
-    # Buscar membros
-    result = await db.execute(
+    # Buscar membros diretos
+    direct_result = await db.execute(
         select(MapMember, Profile)
         .outerjoin(Profile, Profile.user_id == MapMember.user_id)
         .where(MapMember.map_id == map_id)
-        .order_by(MapMember.joined_at)
     )
     
-    members = []
-    
-    # Adicionar o criador do mapa primeiro (se não for membro explícito)
-    owner_result = await db.execute(
-        select(Profile).where(Profile.user_id == map_obj.created_by)
+    # Buscar membros de grupos vinculados
+    group_members_result = await db.execute(
+        select(GroupMember, Profile)
+        .join(GroupMap, GroupMap.group_id == GroupMember.group_id)
+        .outerjoin(Profile, Profile.user_id == GroupMember.user_id)
+        .where(GroupMap.map_id == map_id)
     )
-    owner_profile = owner_result.scalar_one_or_none()
     
-    # Verificar se o owner já está na lista de membros
-    member_ids = []
-    for member, profile in result.all():
-        member_ids.append(member.user_id)
-        members.append(MapMemberWithColor(
+    group_members_all = group_members_result.all()
+
+    # Dicionário para evitar duplicatas: user_id -> MapMemberWithColor
+    members_dict = {}
+    
+    # 1. Adicionar membros diretos (têm prioridade pois têm cor personalizada)
+    for member, profile in direct_result.all():
+        members_dict[member.user_id] = MapMemberWithColor(
             id=member.id,
             user_id=member.user_id,
             username=profile.username if profile else None,
@@ -559,21 +741,42 @@ async def get_map_members_with_colors(
             role=member.role,
             color=member.color,
             joined_at=member.joined_at
-        ))
+        )
+
+    # 2. Adicionar owner (se não estiver)
+    owner_result = await db.execute(select(Profile).where(Profile.user_id == map_obj.created_by))
+    owner_profile = owner_result.scalar_one_or_none()
     
-    # Se o owner não está na lista de membros, adicionar
-    if map_obj.created_by not in member_ids:
-        members.insert(0, MapMemberWithColor(
-            id=map_obj.id,  # Usar o ID do mapa como ID do "membro" owner
+    if map_obj.created_by not in members_dict:
+        members_dict[map_obj.created_by] = MapMemberWithColor(
+            id=map_obj.id,
             user_id=map_obj.created_by,
             username=owner_profile.username if owner_profile else None,
             avatar_url=owner_profile.avatar_url if owner_profile else None,
             role="owner",
-            color="#3B82F6",  # Cor padrão para o owner
+            color="#3B82F6",
             joined_at=map_obj.created_at
-        ))
+        )
+        
     
-    return members
+    # 3. Adicionar membros de grupo (se ainda não estiverem)
+    for member, profile in group_members_all:
+        if member.user_id not in members_dict:
+            # Gerar cor determinística baseada no user_id
+            color_index = hash(member.user_id) % len(MEMBER_COLORS)
+            assigned_color = MEMBER_COLORS[color_index]
+            
+            members_dict[member.user_id] = MapMemberWithColor(
+                id=member.id, # ID do GroupMember
+                user_id=member.user_id,
+                username=profile.username if profile else None,
+                avatar_url=profile.avatar_url if profile else None,
+                role="group_member", # Role diferente para indicar origem
+                color=assigned_color,
+                joined_at=member.joined_at
+            )
+            
+    return list(members_dict.values())
 
 
 @router.put("/maps/{map_id}/members/{user_id}/color")
@@ -655,20 +858,10 @@ async def get_map_places_with_creators(
             detail="Mapa não encontrado"
         )
     
-    # Verificar se tem acesso (owner ou membro)
-    is_owner = map_obj.created_by == current_user.id
+    # Verificar se tem acesso (owner, membro ou group member)
+    has_access = await check_map_access(db, map_id, current_user.id)
     
-    result = await db.execute(
-        select(MapMember).where(
-            and_(
-                MapMember.map_id == map_id,
-                MapMember.user_id == current_user.id
-            )
-        )
-    )
-    is_member = result.scalar_one_or_none() is not None
-    
-    if not is_owner and not is_member and not map_obj.is_public:
+    if not has_access and not map_obj.is_public:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Você não tem acesso a este mapa"

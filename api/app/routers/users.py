@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from app.utils.websockets import manager
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -119,3 +120,25 @@ async def get_user_profile(
         )
     
     return profile
+
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str):
+    """
+    WebSocket para notificações em tempo real.
+    """
+    from app.utils.security import verify_access_token
+    
+    user_id = verify_access_token(token)
+    if not user_id:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await manager.connect(websocket, user_id)
+    try:
+        while True:
+            # Manter conexão aberta e responder a pings se necessário
+            data = await websocket.receive_text()
+            # O cliente atualmente não envia dados, mas mantemos o loop
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_id)

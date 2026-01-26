@@ -9,6 +9,7 @@ from app.models.map_member import MapMember
 from app.models.group import Group, GroupMember, GroupMap
 from app.schemas.map import MapCreate, MapUpdate, MapResponse, MapGroupInfo
 from app.utils.dependencies import get_current_user
+from app.utils.permissions import check_map_access
 
 router = APIRouter(prefix="/maps", tags=["Maps"])
 
@@ -190,16 +191,12 @@ async def get_map(
         )
     
     # Verificar acesso
-    if map_obj.created_by != current_user.id:
-        result = await db.execute(
-            select(MapMember)
-            .where(MapMember.map_id == map_id, MapMember.user_id == current_user.id)
+    has_access = await check_map_access(db, map_id, current_user.id)
+    if not has_access:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso negado"
         )
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Acesso negado"
-            )
     
     # Contar lugares
     result = await db.execute(

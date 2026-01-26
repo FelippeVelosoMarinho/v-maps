@@ -11,33 +11,11 @@ from app.models.place import Place
 from app.models.map_member import MapMember
 from app.schemas.place import PlaceCreate, PlaceUpdate, PlaceResponse
 from app.utils.dependencies import get_current_user
+from app.utils.permissions import check_map_access
 
 router = APIRouter(prefix="/places", tags=["Places"])
 
 
-async def check_map_access(map_id: str, user_id: str, db: AsyncSession) -> Map:
-    """Verifica se o usuário tem acesso ao mapa."""
-    result = await db.execute(select(Map).where(Map.id == map_id))
-    map_obj = result.scalar_one_or_none()
-    
-    if not map_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Mapa não encontrado"
-        )
-    
-    if map_obj.created_by != user_id:
-        result = await db.execute(
-            select(MapMember)
-            .where(MapMember.map_id == map_id, MapMember.user_id == user_id)
-        )
-        if not result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Acesso negado ao mapa"
-            )
-    
-    return map_obj
 
 
 @router.get("", response_model=list[PlaceResponse])
@@ -50,7 +28,13 @@ async def get_places(
     Retorna lugares. Se map_id for fornecido, filtra por mapa.
     """
     if map_id:
-        await check_map_access(map_id, current_user.id, db)
+        if not await check_map_access(db, map_id, current_user.id):
+            # Check if map exists for 404
+            map_exists = await db.scalar(select(Map.id).where(Map.id == map_id))
+            if not map_exists:
+                raise HTTPException(status_code=404, detail="Mapa não encontrado")
+            raise HTTPException(status_code=403, detail="Acesso negado ao mapa")
+            
         result = await db.execute(
             select(Place).where(Place.map_id == map_id)
             .order_by(Place.created_at.desc())
@@ -77,7 +61,12 @@ async def create_place(
     """
     Cria um novo lugar.
     """
-    await check_map_access(place_data.map_id, current_user.id, db)
+    if not await check_map_access(db, place_data.map_id, current_user.id):
+        # Check if map exists for 404
+        map_exists = await db.scalar(select(Map.id).where(Map.id == place_data.map_id))
+        if not map_exists:
+            raise HTTPException(status_code=404, detail="Mapa não encontrado")
+        raise HTTPException(status_code=403, detail="Acesso negado ao mapa")
     
     # Buscar a cor do usuário para este mapa
     user_color = "blue"  # Cor padrão
@@ -140,7 +129,11 @@ async def get_place(
             detail="Lugar não encontrado"
         )
     
-    await check_map_access(place.map_id, current_user.id, db)
+    if not await check_map_access(db, place.map_id, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Acesso negado ao mapa"
+        )
     
     return place
 

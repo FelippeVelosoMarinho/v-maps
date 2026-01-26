@@ -13,7 +13,8 @@ from app.models.profile import Profile
 from app.models.social import CheckInLike, CheckInComment
 from app.schemas.check_in import CheckInCreate, CheckInResponse, CheckInWithDetails
 from app.utils.dependencies import get_current_user
-from app.config import settings
+from app.utils.permissions import check_map_access
+from app.models.map import Map # Import Map for queries
 
 router = APIRouter(prefix="/check-ins", tags=["Check-ins"])
 
@@ -32,6 +33,19 @@ async def get_check_ins(
     query = select(CheckIn).order_by(CheckIn.visited_at.desc()).limit(limit)
     
     if place_id:
+        # Verify place exists and user has access
+        result = await db.execute(select(Place).where(Place.id == place_id))
+        place = result.scalar_one_or_none()
+        
+        if not place:
+            raise HTTPException(status_code=404, detail="Lugar não encontrado")
+            
+        if not await check_map_access(db, place.map_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acesso negado ao mapa"
+            )
+
         # Filtrar por place_id específico
         query = (
             select(CheckIn)
@@ -40,6 +54,13 @@ async def get_check_ins(
             .limit(limit)
         )
     elif map_id:
+        # Check access to the map
+        if not await check_map_access(db, map_id, current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Acesso negado ao mapa"
+            )
+            
         # Filtrar por map_id (todos os check-ins de lugares nesse mapa)
         query = (
             select(CheckIn)
@@ -137,6 +158,13 @@ async def create_check_in(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Lugar não encontrado"
+        )
+        
+    # Check access to the map
+    if not await check_map_access(db, place.map_id, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Você não tem acesso a este mapa"
         )
     
     photo_url = None

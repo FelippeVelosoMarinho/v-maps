@@ -3,6 +3,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
+import time
+import logging
+from fastapi import Request
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.database import create_tables
@@ -18,6 +25,7 @@ from app.routers import (
     social_router,
     trips_router,
     avatars_router,
+    notifications_router,
 )
 
 
@@ -44,6 +52,22 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+# Middleware de Logging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    logger.info(f"Iniciando requisição: {request.method} {request.url.path}")
+    
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logger.info(f"Finalizando requisição: {request.method} {request.url.path} - Status: {response.status_code} - Tempo: {process_time:.4f}s")
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"Erro na requisição: {request.method} {request.url.path} - Erro: {str(e)} - Tempo: {process_time:.4f}s")
+        raise e
 
 # CORS
 app.add_middleware(
@@ -80,6 +104,7 @@ app.include_router(groups_router)
 app.include_router(social_router)
 app.include_router(trips_router)
 app.include_router(avatars_router)
+app.include_router(notifications_router)
 
 
 @app.get("/")
