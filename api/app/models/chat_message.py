@@ -16,7 +16,13 @@ class ChatMessage(Base):
     map_id: Mapped[str] = mapped_column(
         String(36), 
         ForeignKey("maps.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+        index=True
+    )
+    trip_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("trips.id", ondelete="CASCADE"),
+        nullable=True,
         index=True
     )
     user_id: Mapped[str] = mapped_column(
@@ -29,4 +35,5 @@ class ChatMessage(Base):
     
     # Relationships
     map: Mapped["Map"] = relationship("Map", back_populates="chat_messages")
+    trip: Mapped["Trip"] = relationship("Trip")
     user: Mapped["User"] = relationship("User", back_populates="chat_messages")

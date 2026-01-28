@@ -35,6 +35,20 @@ class Trip(Base):
         onupdate=datetime.utcnow
     )
     
+    # Report fields (Book of Memories)
+    rating: Mapped[int] = mapped_column(nullable=True)
+    favorite_photos: Mapped[list[str]] = mapped_column(
+        String(2000), # Simple JSON string storage or multiple URLs
+        nullable=True,
+        default="[]"
+    )
+    useful_links: Mapped[list[str]] = mapped_column(
+        String(2000), # Simple JSON string storage or multiple links
+        nullable=True,
+        default="[]"
+    )
+    shared_to_feed: Mapped[bool] = mapped_column(Boolean, default=False)
+    
     # Relationships
     map: Mapped["Map"] = relationship("Map", back_populates="trips")
     creator: Mapped["User"] = relationship("User", back_populates="trips")

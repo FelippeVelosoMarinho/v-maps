@@ -30,6 +30,7 @@ class CheckIn(Base):
     rating: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1-5 estrelas
     visited_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    shared_to_feed: Mapped[bool] = mapped_column(Boolean, default=False)
     
     # Relationships
     place: Mapped["Place"] = relationship("Place", back_populates="check_ins")

@@ -12,7 +12,11 @@ from app.models import (
     Trip, TripParticipant, TripLocation, Map, MapMember, User, 
     GroupMap, GroupMember, Notification
 )
-from app.schemas.trip import TripCreate, TripResponse, LocationUpdate, AddParticipantsRequest
+from app.schemas.trip import (
+    TripCreate, TripResponse, LocationUpdate, AddParticipantsRequest,
+    TripReportSubmit
+)
+import json
 from app.utils.permissions import check_map_access
 from app.utils.dependencies import get_current_user
 from app.utils.websockets import manager
@@ -97,15 +101,9 @@ async def create_trip(
 
     # Process invitations
     for user_id in users_to_invite:
-        # Skip creator
         if user_id == current_user.id:
             continue
             
-        # Verify access (redundant if coming from map_members/groups, but safe)
-        # Check if already added (to prevent duplicates if user is in multiple lists)
-        # The set handles duplicates in IDs, but we need to check if we already db.add'ed?
-        # No, iterating the set ensures uniqueness.
-        
         participant = TripParticipant(
             trip_id=trip_id,
             user_id=user_id,
@@ -163,6 +161,19 @@ async def create_trip(
         )
     )
     trip = result.scalars().first()
+    
+    # Broadcast "Incoming Call" to all invited participants
+    if users_to_invite:
+        await manager.broadcast_trip_event(
+            list(users_to_invite),
+            "trip_call_incoming",
+            {
+                "trip_id": trip.id,
+                "trip_name": trip.name,
+                "created_by_name": current_user.email,  # Or profile username if available
+                "map_id": trip.map_id
+            }
+        )
     
     return trip
 
@@ -429,24 +440,34 @@ async def add_trip_participants(
     new_participants_ids = []
 
     for user_id in request.user_ids:
-        if user_id not in current_participant_ids:
+        # Skip current user
+        if user_id == current_user.id:
+            continue
+
+        existing_participant = next((p for p in trip.participants if p.user_id == user_id), None)
+
+        if not existing_participant or existing_participant.status == 'declined':
             # Verify user exists and has access to the map
             user_result = await db.execute(select(User).where(User.id == user_id))
-            user = user_result.scalars().first()
+            user_obj = user_result.scalars().first()
             
-            if not user:
+            if not user_obj:
                 continue  # Skip invalid user IDs
             
             # Check if user has access to the map
             has_access = await check_map_access(db, trip.map_id, user_id)
             
             if has_access:
-                participant = TripParticipant(
-                    trip_id=trip_id,
-                    user_id=user_id,
-                    status="invited" # Default status
-                )
-                db.add(participant)
+                if existing_participant:
+                    existing_participant.status = "invited"
+                    print(f"Re-invited user {user_id}")
+                else:
+                    participant = TripParticipant(
+                        trip_id=trip_id,
+                        user_id=user_id,
+                        status="invited" # Default status
+                    )
+                    db.add(participant)
                 added_count += 1
                 new_participants_ids.append(user_id)
     
@@ -481,6 +502,63 @@ async def add_trip_participants(
         })
 
     return trip
+
+
+@router.delete("/{trip_id}/participants/{user_id}")
+async def remove_trip_participant(
+    trip_id: str,
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Remove a participant from a trip (only creator can do this)"""
+    
+    # Get trip
+    trip_result = await db.execute(select(Trip).where(Trip.id == trip_id))
+    trip = trip_result.scalars().first()
+    
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    # Check permissions (only creator)
+    if trip.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Only trip creator can remove participants")
+        
+    # Find participant
+    participant_result = await db.execute(
+        select(TripParticipant).where(
+            (TripParticipant.trip_id == trip_id) & 
+            (TripParticipant.user_id == user_id)
+        )
+    )
+    participant = participant_result.scalars().first()
+    
+    if not participant:
+        raise HTTPException(status_code=400, detail="User is not a participant in this trip")
+    
+    # Remove participant
+    await db.delete(participant)
+    await db.commit()
+    
+    # Notify remaining participants
+    result = await db.execute(
+         select(TripParticipant.user_id).where(TripParticipant.trip_id == trip_id)
+    )
+    remaining_ids = result.scalars().all()
+    
+    await manager.broadcast(list(remaining_ids), {
+        "type": "trip_updated",
+        "trip_id": trip_id
+    })
+    
+    # Notify the removed user specifically
+    await manager.broadcast([user_id], {
+        "type": "trip_updated",
+        "trip_id": trip_id,
+        "action": "removed"
+    })
+    
+    return {"message": "Participant removed successfully"}
 
 
 @router.post("/{trip_id}/leave")
@@ -676,12 +754,18 @@ async def update_trip_location(
     await db.commit()
 
     # Broadcast location update to other participants
-    # Maybe limit frequency? For now, real-time is real-time.
     participant_ids = [p.user_id for p in trip.participants]
-    await manager.broadcast(participant_ids, {
-        "type": "trip_updated", # Or location_updated if we want to be granular
-        "trip_id": trip_id
-    })
+    await manager.broadcast_trip_event(
+        participant_ids,
+        "location_updated",
+        {
+            "trip_id": trip_id,
+            "user_id": current_user.id,
+            "latitude": location.latitude,
+            "longitude": location.longitude,
+            "recorded_at": trip_location.recorded_at.isoformat()
+        }
+    )
     
     return {"message": "Location updated successfully"}
 
@@ -732,3 +816,71 @@ async def get_trip_locations(
         }
         for loc in locations
     ]
+
+
+@router.get("/user/{user_id}", response_model=list[TripResponse])
+async def get_user_trip_history(
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get trip history for a user"""
+    
+    # Get trips where user is a participant or creator
+    # Also load participants and profiles for the "Book of Memories" view
+    result = await db.execute(
+        select(Trip)
+        .join(TripParticipant)
+        .where(
+            (Trip.created_by == user_id) | (TripParticipant.user_id == user_id)
+        )
+        .options(
+            selectinload(Trip.participants).selectinload(TripParticipant.user).selectinload(User.profile),
+            selectinload(Trip.locations)
+        )
+        .distinct()
+        .order_by(Trip.started_at.desc())
+    )
+    trips = result.scalars().all()
+    
+    return trips
+
+
+@router.post("/{trip_id}/report", response_model=TripResponse)
+async def submit_trip_report(
+    trip_id: str,
+    report: TripReportSubmit,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Submit a report for a finished trip"""
+    
+    # Get trip
+    result = await db.execute(
+        select(Trip)
+        .where(Trip.id == trip_id)
+        .options(
+            selectinload(Trip.participants).selectinload(TripParticipant.user).selectinload(User.profile),
+            selectinload(Trip.locations)
+        )
+    )
+    trip = result.scalars().first()
+    
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    
+    if trip.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the trip creator can submit a report")
+    
+    if trip.is_active:
+        raise HTTPException(status_code=400, detail="Cannot submit report for an active trip. End it first.")
+
+    # Update fields
+    trip.rating = report.rating
+    trip.favorite_photos = json.dumps(report.favorite_photos)
+    trip.useful_links = json.dumps(report.useful_links)
+    
+    await db.commit()
+    await db.refresh(trip)
+    
+    return trip

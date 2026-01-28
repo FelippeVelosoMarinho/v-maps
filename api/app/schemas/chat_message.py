@@ -8,12 +8,14 @@ class ChatMessageBase(BaseModel):
 
 
 class ChatMessageCreate(ChatMessageBase):
-    map_id: str
+    map_id: str | None = None
+    trip_id: str | None = None
 
 
 class ChatMessageResponse(ChatMessageBase):
     id: str
-    map_id: str
+    map_id: str | None = None
+    trip_id: str | None = None
     user_id: str
     created_at: datetime
     

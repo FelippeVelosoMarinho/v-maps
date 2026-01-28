@@ -179,3 +179,41 @@ class PlaceWithCreator(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+# =====================
+# Trip Book Schemas (Feed)
+# =====================
+
+class TripBookResponse(BaseModel):
+    """Resumo de uma viagem finalizada para o feed"""
+    id: str
+    name: str
+    description: str | None
+    map_id: str
+    created_by: str
+    started_at: datetime
+    ended_at: datetime
+    participants_count: int
+    locations: list[dict] # Coordenadas para o traçado
+    rating: int | None
+    favorite_photos: list[str] = []
+    
+    # Info do criador
+    creator_username: str | None = None
+    creator_avatar_url: str | None = None
+    shared_to_feed: bool = False
+    
+    class Config:
+        from_attributes = True
+
+
+# =====================
+# Combined Feed Schema
+# =====================
+
+from app.schemas.check_in import CheckInWithDetails
+from typing import Union
+
+class SocialFeedResponse(BaseModel):
+    items: list[Union[CheckInWithDetails, TripBookResponse, PlaceWithCreator]]

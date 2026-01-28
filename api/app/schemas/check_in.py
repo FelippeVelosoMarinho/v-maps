@@ -31,3 +31,4 @@ class CheckInWithDetails(CheckInResponse):
     likes_count: int = 0
     comments_count: int = 0
     is_liked: bool = False
+    shared_to_feed: bool = False

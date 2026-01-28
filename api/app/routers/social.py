@@ -16,6 +16,7 @@ from app.models.friendship import Friendship, FriendshipStatus
 from app.models.map_member import MapMember
 from app.models.group import GroupMember, GroupMap
 from app.models.user_social import FavoritePlace, WishListPlace
+from app.models.trip import Trip, TripParticipant, TripLocation
 from app.schemas.check_in import CheckInWithDetails
 from app.schemas.social import (
     CheckInLikeResponse,
@@ -29,9 +30,12 @@ from app.schemas.social import (
     PlaceWithCreator,
     UserPlaceInteractionCreate,
     UserPlaceInteractionResponse,
+    TripBookResponse,
+    SocialFeedResponse,
 )
 from app.utils.dependencies import get_current_user
 from app.utils.permissions import check_map_access
+import json
 
 router = APIRouter(prefix="/social", tags=["Social"])
 
@@ -317,62 +321,84 @@ async def delete_comment(
 # Social Feed
 # =====================
 
-@router.get("/feed", response_model=list[CheckInWithDetails])
+@router.get("/feed", response_model=SocialFeedResponse)
 async def get_social_feed(
     limit: int = 50,
+    feed_type: str = "for_you", # "for_you" (global), "following" (friends), or "personal" (me)
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Obter feed social (check-ins de amigos) em ordem cronológica"""
-    # Buscar IDs dos amigos
-    friends_result = await db.execute(
-        select(Friendship).where(
-            and_(
-                Friendship.status == FriendshipStatus.ACCEPTED,
-                or_(
-                    Friendship.requester_id == current_user.id,
-                    Friendship.addressee_id == current_user.id
+    """Obter feed social (check-ins, viagens e novos lugares) em ordem cronológica"""
+    
+    user_ids = []
+    is_public_view = feed_type == "for_you"
+    is_personal_view = feed_type == "personal"
+    
+    if is_public_view:
+        # Explorar view: Show all public content + explicit shares
+        pass
+    elif is_personal_view:
+        # Postar view: Show only MY items (shared or not)
+        user_ids = [current_user.id]
+    else:
+        # Following view: Show only friends + self
+        friends_result = await db.execute(
+            select(Friendship).where(
+                and_(
+                    Friendship.status == FriendshipStatus.ACCEPTED,
+                    or_(
+                        Friendship.requester_id == current_user.id,
+                        Friendship.addressee_id == current_user.id
+                    )
                 )
             )
         )
-    )
-    friendships = friends_result.scalars().all()
-    friend_ids = []
-    for f in friendships:
-        friend_ids.append(f.addressee_id if f.requester_id == current_user.id else f.requester_id)
+        friendships = friends_result.scalars().all()
+        user_ids = [f.addressee_id if f.requester_id == current_user.id else f.requester_id for f in friendships]
+        user_ids.append(current_user.id)
     
-    # Incluir o próprio usuário no feed
-    user_ids = friend_ids + [current_user.id]
-    
-    # Buscar check-ins desses usuários
-    result = await db.execute(
-        select(CheckIn)
-        .where(CheckIn.user_id.in_(user_ids))
-        .order_by(CheckIn.visited_at.desc())
-        .limit(limit)
-    )
+    items = []
+
+    # 1. Buscar check-ins
+    ci_query = select(CheckIn).join(Place).join(Map)
+    if is_public_view:
+        # No feed global, mostramos o que é de mapa público ou explicitamente compartilhado
+        ci_query = ci_query.where(
+            or_(
+                Map.is_public == True, 
+                Map.is_shared == True,
+                CheckIn.shared_to_feed == True
+            )
+        )
+    elif is_personal_view:
+        ci_query = ci_query.where(CheckIn.user_id == current_user.id)
+    else:
+        # No feed de amigos, mostramos o que é dos amigos (mesmo que não seja público no global)
+        # OU o que o usuário explicitamente compartilhou
+        ci_query = ci_query.where(
+            or_(
+                CheckIn.user_id.in_(user_ids),
+                CheckIn.shared_to_feed == True
+            )
+        )
+        
+    ci_query = ci_query.order_by(CheckIn.visited_at.desc()).limit(limit)
+    result = await db.execute(ci_query)
     check_ins = result.scalars().all()
     
-    # Carregar detalhes (mesma lógica do router de check-ins)
-    feed = []
     for ci in check_ins:
-        # Perfil
         p_result = await db.execute(select(Profile).where(Profile.user_id == ci.user_id))
         profile = p_result.scalar_one_or_none()
         
-        # Lugar
         pl_result = await db.execute(select(Place).where(Place.id == ci.place_id))
         place = pl_result.scalar_one_or_none()
         
-        # Likes
         l_result = await db.execute(select(func.count(CheckInLike.id)).where(CheckInLike.check_in_id == ci.id))
         likes_count = l_result.scalar() or 0
         
-        # Comments
         c_result = await db.execute(select(func.count(CheckInComment.id)).where(CheckInComment.check_in_id == ci.id))
         comments_count = c_result.scalar() or 0
         
-        # Is Liked
         il_result = await db.execute(
             select(CheckInLike).where(
                 and_(CheckInLike.check_in_id == ci.id, CheckInLike.user_id == current_user.id)
@@ -380,7 +406,7 @@ async def get_social_feed(
         )
         is_liked = il_result.scalar_one_or_none() is not None
         
-        feed.append(CheckInWithDetails(
+        items.append(CheckInWithDetails(
             id=ci.id,
             place_id=ci.place_id,
             user_id=ci.user_id,
@@ -390,14 +416,153 @@ async def get_social_feed(
             visited_at=ci.visited_at,
             created_at=ci.created_at,
             profile=profile,
-            place_name=place.name if place else None,
+            place_name=place.name if place else "Local desconhecido",
             map_id=place.map_id if place else None,
             likes_count=likes_count,
             comments_count=comments_count,
-            is_liked=is_liked
+            is_liked=is_liked,
+            shared_to_feed=ci.shared_to_feed
         ))
+
+    # 2. Buscar viagens finalizadas
+    t_query = select(Trip).join(Map).where(Trip.is_active == False)
+    if is_public_view:
+        t_query = t_query.where(
+            or_(
+                Map.is_public == True, 
+                Map.is_shared == True,
+                Trip.shared_to_feed == True
+            )
+        )
+    elif is_personal_view:
+        t_query = t_query.where(Trip.created_by == current_user.id)
+    else:
+        t_query = t_query.where(
+            or_(
+                Trip.created_by.in_(user_ids),
+                Trip.shared_to_feed == True
+            )
+        )
+        
+    t_query = t_query.order_by(Trip.ended_at.desc()).limit(limit // 2).options(
+        selectinload(Trip.participants), 
+        selectinload(Trip.locations)
+    )
+    trips_result = await db.execute(t_query)
+    trips = trips_result.scalars().all()
     
-    return feed
+    for trip in trips:
+        creator_profile_result = await db.execute(
+            select(Profile).where(Profile.user_id == trip.created_by)
+        )
+        creator_profile = creator_profile_result.scalar_one_or_none()
+        
+        all_locs = sorted(trip.locations, key=lambda l: l.recorded_at)
+        step = max(1, len(all_locs) // 20)
+        sampled_locs = []
+        for i in range(0, len(all_locs), step):
+            l = all_locs[i]
+            sampled_locs.append({"lat": l.latitude, "lng": l.longitude})
+            
+        items.append(TripBookResponse(
+            id=trip.id,
+            name=trip.name,
+            description=trip.description,
+            map_id=trip.map_id,
+            created_by=trip.created_by,
+            started_at=trip.started_at,
+            ended_at=trip.ended_at,
+            participants_count=len(trip.participants),
+            locations=sampled_locs,
+            rating=trip.rating,
+            favorite_photos=json.loads(trip.favorite_photos or "[]"),
+            creator_username=creator_profile.username if creator_profile else "Viajante",
+            creator_avatar_url=creator_profile.avatar_url if creator_profile else None,
+            shared_to_feed=trip.shared_to_feed
+        ))
+
+    # 3. Buscar LUGARES (Tudo que existe no menu explorar) - Somente se não for pessoal
+    if not is_personal_view:
+        pl_query = select(Place, Profile).join(Map).outerjoin(Profile, Profile.user_id == Place.created_by)
+        if is_public_view:
+            pl_query = pl_query.where(or_(Map.is_public == True, Map.is_shared == True))
+        else:
+            pl_query = pl_query.where(Place.created_by.in_(user_ids))
+            
+        pl_query = pl_query.order_by(Place.created_at.desc()).limit(limit)
+        places_result = await db.execute(pl_query)
+        
+        for place, profile in places_result.all():
+            items.append(PlaceWithCreator(
+                id=place.id,
+                map_id=place.map_id,
+                name=place.name,
+                description=place.description,
+                lat=place.lat,
+                lng=place.lng,
+                address=place.address,
+                google_place_id=place.google_place_id,
+                created_by=place.created_by,
+                creator_color=place.creator_color,
+                creator_username=profile.username if profile else None,
+                creator_avatar_url=profile.avatar_url if profile else None,
+                created_at=place.created_at,
+                updated_at=place.updated_at
+            ))
+        
+    # Ordenar tudo pelo tempo
+    def get_timestamp(item):
+        if isinstance(item, CheckInWithDetails):
+            return item.visited_at
+        if isinstance(item, TripBookResponse):
+            return item.ended_at or item.started_at
+        return item.created_at # PlaceWithCreator
+        
+    items.sort(key=get_timestamp, reverse=True)
+    
+    return SocialFeedResponse(items=items[:limit])
+
+
+@router.post("/check-in/{check_in_id}/share")
+async def share_check_in(
+    check_in_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Compartilhar um check-in no feed social"""
+    ci_result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
+    check_in = ci_result.scalar_one_or_none()
+    
+    if not check_in:
+        raise HTTPException(status_code=404, detail="Check-in não encontrado")
+    
+    if check_in.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Não autorizado")
+    
+    check_in.shared_to_feed = not check_in.shared_to_feed
+    await db.commit()
+    return {"status": "success", "shared": check_in.shared_to_feed}
+
+
+@router.post("/trip/{trip_id}/share")
+async def share_trip(
+    trip_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Compartilhar uma viagem no feed social"""
+    t_result = await db.execute(select(Trip).where(Trip.id == trip_id))
+    trip = t_result.scalar_one_or_none()
+    
+    if not trip:
+        raise HTTPException(status_code=404, detail="Viagem não encontrada")
+    
+    if trip.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Não autorizado")
+    
+    trip.shared_to_feed = not trip.shared_to_feed
+    await db.commit()
+    return {"status": "success", "shared": trip.shared_to_feed}
 
 
 # =====================
@@ -444,6 +609,42 @@ async def remove_favorite(
     await db.commit()
 
 
+@router.get("/favorites", response_model=list[PlaceWithCreator])
+async def get_favorites(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obter lugares favoritos do usuário atual"""
+    result = await db.execute(
+        select(Place, Profile)
+        .join(FavoritePlace, FavoritePlace.place_id == Place.id)
+        .outerjoin(Profile, Profile.user_id == Place.created_by)
+        .where(FavoritePlace.user_id == current_user.id)
+        .order_by(FavoritePlace.created_at.desc())
+    )
+    
+    places = []
+    for place, profile in result.all():
+        places.append(PlaceWithCreator(
+            id=place.id,
+            map_id=place.map_id,
+            name=place.name,
+            description=place.description,
+            lat=place.lat,
+            lng=place.lng,
+            address=place.address,
+            google_place_id=place.google_place_id,
+            created_by=place.created_by,
+            creator_color=place.creator_color,
+            creator_username=profile.username if profile else None,
+            creator_avatar_url=profile.avatar_url if profile else None,
+            created_at=place.created_at,
+            updated_at=place.updated_at
+        ))
+    
+    return places
+
+
 @router.post("/wishlist", response_model=UserPlaceInteractionResponse)
 async def add_to_wishlist(
     data: UserPlaceInteractionCreate,
@@ -482,6 +683,42 @@ async def remove_from_wishlist(
         raise HTTPException(status_code=404, detail="Não encontrado na lista de desejos")
     await db.delete(wish)
     await db.commit()
+
+
+@router.get("/wishlist", response_model=list[PlaceWithCreator])
+async def get_wishlist(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obter lugares na lista de desejos do usuário atual"""
+    result = await db.execute(
+        select(Place, Profile)
+        .join(WishListPlace, WishListPlace.place_id == Place.id)
+        .outerjoin(Profile, Profile.user_id == Place.created_by)
+        .where(WishListPlace.user_id == current_user.id)
+        .order_by(WishListPlace.created_at.desc())
+    )
+    
+    places = []
+    for place, profile in result.all():
+        places.append(PlaceWithCreator(
+            id=place.id,
+            map_id=place.map_id,
+            name=place.name,
+            description=place.description,
+            lat=place.lat,
+            lng=place.lng,
+            address=place.address,
+            google_place_id=place.google_place_id,
+            created_by=place.created_by,
+            creator_color=place.creator_color,
+            creator_username=profile.username if profile else None,
+            creator_avatar_url=profile.avatar_url if profile else None,
+            created_at=place.created_at,
+            updated_at=place.updated_at
+        ))
+    
+    return places
 
 
 # =====================
