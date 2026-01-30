@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -23,11 +23,11 @@ class Group(Base):
         nullable=False,
         index=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, 
-        default=datetime.utcnow, 
-        onupdate=datetime.utcnow
+        default=lambda: datetime.now(timezone.utc), 
+        onupdate=lambda: datetime.now(timezone.utc)
     )
     
     # Relationships
@@ -71,7 +71,7 @@ class GroupMember(Base):
         index=True
     )
     role: Mapped[str] = mapped_column(String(20), default="member")  # owner, admin, member
-    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     group: Mapped["Group"] = relationship("Group", back_populates="members")
@@ -104,7 +104,7 @@ class GroupMap(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False
     )
-    shared_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    shared_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     group: Mapped["Group"] = relationship("Group", back_populates="shared_maps")
@@ -139,7 +139,7 @@ class GroupInvite(Base):
         nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, accepted, rejected
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     
     # Relationships

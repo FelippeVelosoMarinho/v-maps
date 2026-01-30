@@ -11,7 +11,7 @@ from app.models.profile import Profile
 from app.models.map import Map
 from app.models.place import Place
 from app.models.check_in import CheckIn
-from app.models.social import CheckInLike, CheckInComment
+from app.models.social import CheckInLike, CheckInComment, TripLike, TripComment, MapLike, MapComment
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.map_member import MapMember
 from app.models.group import GroupMember, GroupMap
@@ -324,6 +324,7 @@ async def delete_comment(
 @router.get("/feed", response_model=SocialFeedResponse)
 async def get_social_feed(
     limit: int = 50,
+    skip: int = 0,
     feed_type: str = "for_you", # "for_you" (global), "following" (friends), or "personal" (me)
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -382,7 +383,7 @@ async def get_social_feed(
             )
         )
         
-    ci_query = ci_query.order_by(CheckIn.visited_at.desc()).limit(limit)
+    ci_query = ci_query.order_by(CheckIn.visited_at.desc()).limit(limit + skip)
     result = await db.execute(ci_query)
     check_ins = result.scalars().all()
     
@@ -444,7 +445,7 @@ async def get_social_feed(
             )
         )
         
-    t_query = t_query.order_by(Trip.ended_at.desc()).limit(limit // 2).options(
+    t_query = t_query.order_by(Trip.ended_at.desc()).limit(limit + skip).options(
         selectinload(Trip.participants), 
         selectinload(Trip.locations)
     )
@@ -464,6 +465,28 @@ async def get_social_feed(
             l = all_locs[i]
             sampled_locs.append({"lat": l.latitude, "lng": l.longitude})
             
+        try:
+            favorite_photos = []
+            if trip.favorite_photos:
+                if isinstance(trip.favorite_photos, str):
+                    favorite_photos = json.loads(trip.favorite_photos)
+                elif isinstance(trip.favorite_photos, list):
+                    favorite_photos = trip.favorite_photos
+        except Exception:
+            favorite_photos = []
+            
+        # Contar likes do trip
+        t_likes_res = await db.execute(select(func.count(TripLike.id)).where(TripLike.trip_id == trip.id))
+        t_likes_count = t_likes_res.scalar() or 0
+        
+        # Contar comments do trip
+        t_comm_res = await db.execute(select(func.count(TripComment.id)).where(TripComment.trip_id == trip.id))
+        t_comm_count = t_comm_res.scalar() or 0
+        
+        # Verificar se curtiu
+        t_il_res = await db.execute(select(TripLike).where(and_(TripLike.trip_id == trip.id, TripLike.user_id == current_user.id)))
+        t_is_liked = t_il_res.scalar_one_or_none() is not None
+
         items.append(TripBookResponse(
             id=trip.id,
             name=trip.name,
@@ -471,17 +494,60 @@ async def get_social_feed(
             map_id=trip.map_id,
             created_by=trip.created_by,
             started_at=trip.started_at,
-            ended_at=trip.ended_at,
+            ended_at=trip.ended_at or trip.started_at,
             participants_count=len(trip.participants),
             locations=sampled_locs,
             rating=trip.rating,
-            favorite_photos=json.loads(trip.favorite_photos or "[]"),
+            favorite_photos=favorite_photos,
             creator_username=creator_profile.username if creator_profile else "Viajante",
             creator_avatar_url=creator_profile.avatar_url if creator_profile else None,
-            shared_to_feed=trip.shared_to_feed
+            shared_to_feed=trip.shared_to_feed,
+            likes_count=t_likes_count,
+            comments_count=t_comm_count,
+            is_liked=t_is_liked
         ))
 
-    # 3. Buscar LUGARES (Tudo que existe no menu explorar) - Somente se não for pessoal
+    # 3. Buscar mapas compartilhados
+    m_query = select(Map, Profile).join(Profile, Profile.user_id == Map.created_by)
+    if is_public_view:
+        m_query = m_query.where(or_(Map.is_public == True, Map.shared_to_feed == True))
+    elif is_personal_view:
+        m_query = m_query.where(Map.created_by == current_user.id)
+    else:
+        m_query = m_query.where(or_(Map.created_by.in_(user_ids), Map.shared_to_feed == True))
+        
+    m_query = m_query.order_by(Map.created_at.desc()).limit(limit + skip)
+    maps_result = await db.execute(m_query)
+    
+    for map_obj, profile in maps_result.all():
+        # Contar lugares no mapa
+        loc_count_result = await db.execute(select(func.count(Place.id)).where(Place.map_id == map_obj.id))
+        loc_count = loc_count_result.scalar() or 0
+        
+        # Stats do Mapa
+        m_likes_res = await db.execute(select(func.count(MapLike.id)).where(MapLike.map_id == map_obj.id))
+        m_likes_count = m_likes_res.scalar() or 0
+        
+        m_comm_res = await db.execute(select(func.count(MapComment.id)).where(MapComment.map_id == map_obj.id))
+        m_comm_count = m_comm_res.scalar() or 0
+        
+        m_il_res = await db.execute(select(MapLike).where(and_(MapLike.map_id == map_obj.id, MapLike.user_id == current_user.id)))
+        m_is_liked = m_il_res.scalar_one_or_none() is not None
+
+        items.append(PublicMapResponse(
+            id=map_obj.id,
+            name=map_obj.name,
+            icon=map_obj.icon,
+            color=map_obj.color,
+            location_count=loc_count,
+            created_at=map_obj.created_at,
+            shared_to_feed=map_obj.shared_to_feed,
+            likes_count=m_likes_count,
+            comments_count=m_comm_count,
+            is_liked=m_is_liked
+        ))
+
+    # 4. Buscar LUGARES (Tudo que existe no menu explorar) - Somente se não for pessoal
     if not is_personal_view:
         pl_query = select(Place, Profile).join(Map).outerjoin(Profile, Profile.user_id == Place.created_by)
         if is_public_view:
@@ -489,7 +555,7 @@ async def get_social_feed(
         else:
             pl_query = pl_query.where(Place.created_by.in_(user_ids))
             
-        pl_query = pl_query.order_by(Place.created_at.desc()).limit(limit)
+        pl_query = pl_query.order_by(Place.created_at.desc()).limit(limit + skip)
         places_result = await db.execute(pl_query)
         
         for place, profile in places_result.all():
@@ -512,15 +578,23 @@ async def get_social_feed(
         
     # Ordenar tudo pelo tempo
     def get_timestamp(item):
+        ts = None
         if isinstance(item, CheckInWithDetails):
-            return item.visited_at
-        if isinstance(item, TripBookResponse):
-            return item.ended_at or item.started_at
-        return item.created_at # PlaceWithCreator
+            ts = item.visited_at
+        elif isinstance(item, TripBookResponse) or isinstance(item, PublicMapResponse):
+            ts = item.created_at if isinstance(item, PublicMapResponse) else (item.ended_at or item.started_at)
+        elif hasattr(item, 'created_at'):
+            ts = item.created_at
+            
+        if ts is None:
+            # Fallback very safe - assume UTC as it's the standard in the app
+            from datetime import timezone
+            return datetime.min.replace(tzinfo=timezone.utc)
+        return ts
         
     items.sort(key=get_timestamp, reverse=True)
     
-    return SocialFeedResponse(items=items[:limit])
+    return SocialFeedResponse(items=items[skip : skip + limit])
 
 
 @router.post("/check-in/{check_in_id}/share")
@@ -563,6 +637,74 @@ async def share_trip(
     trip.shared_to_feed = not trip.shared_to_feed
     await db.commit()
     return {"status": "success", "shared": trip.shared_to_feed}
+
+
+@router.post("/map/{map_id}/share")
+async def share_map(
+    map_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Compartilhar um mapa no feed social"""
+    m_result = await db.execute(select(Map).where(Map.id == map_id))
+    map_obj = m_result.scalar_one_or_none()
+    
+    if not map_obj:
+        raise HTTPException(status_code=404, detail="Mapa não encontrado")
+    
+    if map_obj.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Não autorizado")
+    
+    map_obj.shared_to_feed = not map_obj.shared_to_feed
+    await db.commit()
+    return {"status": "success", "shared": map_obj.shared_to_feed}
+
+
+@router.post("/map/{map_id}/copy")
+async def copy_map(
+    map_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Copiar um mapa compartilhado para a lista do usuário atual"""
+    result = await db.execute(select(Map).where(Map.id == map_id))
+    original_map = result.scalar_one_or_none()
+    
+    if not original_map:
+        raise HTTPException(status_code=404, detail="Mapa não encontrado")
+    
+    # Criar novo mapa
+    new_map = Map(
+        name=f"Cópia de {original_map.name}",
+        icon=original_map.icon,
+        color=original_map.color,
+        created_by=current_user.id,
+        is_shared=False,
+        is_public=False
+    )
+    db.add(new_map)
+    await db.flush() # Gerar ID do novo mapa
+    
+    # Copiar lugares
+    places_result = await db.execute(select(Place).where(Place.map_id == map_id))
+    original_places = places_result.scalars().all()
+    
+    for place in original_places:
+        new_place = Place(
+            map_id=new_map.id,
+            name=place.name,
+            description=place.description,
+            lat=place.lat,
+            lng=place.lng,
+            address=place.address,
+            google_place_id=place.google_place_id,
+            created_by=current_user.id,
+            creator_color=place.creator_color
+        )
+        db.add(new_place)
+        
+    await db.commit()
+    return {"status": "success", "new_map_id": new_map.id}
 
 
 # =====================

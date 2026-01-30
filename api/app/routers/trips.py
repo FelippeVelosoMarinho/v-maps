@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 
 # ... (imports)
 
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from app.database import get_db
 from app.models import (
@@ -278,7 +278,7 @@ async def accept_trip(
             raise HTTPException(status_code=400, detail="Already accepted")
         
         participant.status = "accepted"
-        participant.joined_at = datetime.utcnow()
+        participant.joined_at = datetime.now(timezone.utc)
     else:
         # User joining without prior invite (if allowed)
         # For now, we allow it (same as join_trip)
@@ -591,7 +591,7 @@ async def leave_trip(
     # If creator is leaving, end the trip
     if trip.created_by == current_user.id:
         trip.is_active = False
-        trip.ended_at = datetime.utcnow()
+        trip.ended_at = datetime.now(timezone.utc)
         await db.commit() # Commit trip ending
         
         # Notify everyone with persistent notifications
@@ -682,7 +682,7 @@ async def end_trip(
         raise HTTPException(status_code=403, detail="Only trip creator can end it")
     
     trip.is_active = False
-    trip.ended_at = datetime.utcnow()
+    trip.ended_at = datetime.now(timezone.utc)
     await db.commit()
     
     # Notify everyone with persistent notifications
@@ -747,7 +747,7 @@ async def update_trip_location(
         latitude=location.latitude,
         longitude=location.longitude,
         accuracy=location.accuracy,
-        recorded_at=datetime.utcnow()
+        recorded_at=datetime.now(timezone.utc)
     )
     
     db.add(trip_location)

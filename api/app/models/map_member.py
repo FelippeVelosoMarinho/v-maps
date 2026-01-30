@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -27,7 +27,7 @@ class MapMember(Base):
     )
     role: Mapped[str] = mapped_column(String(20), default="member")  # owner, admin, member
     color: Mapped[str] = mapped_column(String(20), default="blue")  # Cor do marcador do membro
-    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     map: Mapped["Map"] = relationship("Map", back_populates="members")

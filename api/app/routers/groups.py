@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 from app.database import get_db
 from app.models.user import User
 from app.models.profile import Profile
@@ -882,7 +882,7 @@ async def respond_to_invite(
     
     # Update invite
     invite.status = "accepted" if action_data.action == "accept" else "rejected"
-    invite.responded_at = datetime.utcnow()
+    invite.responded_at = datetime.now(timezone.utc)
     
     # If accepted, add as member
     if action_data.action == "accept":

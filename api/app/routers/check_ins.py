@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import uuid
 import aiofiles
@@ -206,7 +206,7 @@ async def create_check_in(
         comment=comment,
         rating=rating,
         photo_url=photo_url,
-        visited_at=datetime.utcnow()
+        visited_at=datetime.now(timezone.utc)
     )
     db.add(new_check_in)
     await db.commit()

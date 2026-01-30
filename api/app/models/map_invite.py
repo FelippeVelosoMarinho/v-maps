@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import String, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -26,7 +26,7 @@ class MapInvite(Base):
         nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, accepted, rejected
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
     map: Mapped["Map"] = relationship("Map", back_populates="invites")
