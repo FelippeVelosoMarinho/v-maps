@@ -333,88 +333,126 @@ async def get_social_feed(
     current_user: User = Depends(get_current_user)
 ):
     """Obter feed social usando SocialPosts"""
+    if limit <= 0:
+        return SocialFeedResponse(items=[])
     
-    # Helper to clean content
-    async def get_content_details(post):
-        content_item = None
-        if post.content_type == 'check_in':
-            res = await db.execute(select(CheckIn).where(CheckIn.id == post.content_id))
-            ci = res.scalar_one_or_none()
-            if ci:
-                 # Populate profile/place/stats
-                 p_res = await db.execute(select(Profile).where(Profile.user_id == ci.user_id))
-                 profile = p_res.scalar_one_or_none()
-                 pl_res = await db.execute(select(Place).where(Place.id == ci.place_id))
-                 place = pl_res.scalar_one_or_none()
-                 
-                 content_item = CheckInWithDetails(
-                    id=ci.id,
-                    place_id=ci.place_id,
-                    user_id=ci.user_id,
-                    comment=ci.comment,
-                    rating=ci.rating,
-                    photo_url=ci.photo_url,
-                    visited_at=ci.visited_at,
-                    created_at=ci.created_at,
-                    profile=profile,
-                    place_name=place.name if place else "Local desconhecido",
-                    map_id=place.map_id if place else None,
-                    # Likes/Comments of content are legacy, can show if needed but SocialPost has its own
-                    likes_count=0, 
-                    comments_count=0,
-                    is_liked=False,
-                    shared_to_feed=ci.shared_to_feed
-                )
-        elif post.content_type == 'trip':
-             res = await db.execute(select(Trip).where(Trip.id == post.content_id).options(selectinload(Trip.participants), selectinload(Trip.locations)))
-             trip = res.scalar_one_or_none()
-             if trip:
-                 cr_res = await db.execute(select(Profile).where(Profile.user_id == trip.created_by))
-                 creator = cr_res.scalar_one_or_none()
-                 
-                 all_locs = sorted(trip.locations, key=lambda l: l.recorded_at)
-                 step = max(1, len(all_locs) // 20)
-                 sampled_locs = [{"lat": l.latitude, "lng": l.longitude} for l in all_locs[::step]]
-                 
-                 favorite_photos = []
-                 try:
-                    if trip.favorite_photos:
-                        if isinstance(trip.favorite_photos, str):
-                            favorite_photos = json.loads(trip.favorite_photos)
-                        elif isinstance(trip.favorite_photos, list):
-                            favorite_photos = trip.favorite_photos
-                 except: pass
+    if limit > 100:
+        limit = 100
+    
+# Helper to fetch and format social content
+async def get_social_content_details(db: AsyncSession, post_type: str, content_id: str):
+    content_item = None
+    if post_type == 'check_in':
+        res = await db.execute(select(CheckIn).where(CheckIn.id == content_id))
+        ci = res.scalar_one_or_none()
+        if ci:
+             p_res = await db.execute(select(Profile).where(Profile.user_id == ci.user_id))
+             profile = p_res.scalar_one_or_none()
+             pl_res = await db.execute(select(Place).where(Place.id == ci.place_id))
+             place = pl_res.scalar_one_or_none()
+             
+             content_item = CheckInWithDetails(
+                id=ci.id,
+                place_id=ci.place_id,
+                user_id=ci.user_id,
+                comment=ci.comment,
+                rating=ci.rating,
+                photo_url=ci.photo_url,
+                visited_at=ci.visited_at,
+                created_at=ci.created_at,
+                profile=profile,
+                place_name=place.name if place else "Local desconhecido",
+                map_id=place.map_id if place else None,
+                likes_count=0, 
+                comments_count=0,
+                is_liked=False,
+                shared_to_feed=ci.shared_to_feed
+            )
+    elif post_type == 'trip':
+         res = await db.execute(select(Trip).where(Trip.id == content_id).options(selectinload(Trip.participants), selectinload(Trip.locations)))
+         trip = res.scalar_one_or_none()
+         if trip:
+             cr_res = await db.execute(select(Profile).where(Profile.user_id == trip.created_by))
+             creator = cr_res.scalar_one_or_none()
+             
+             all_locs = sorted(trip.locations, key=lambda l: l.recorded_at)
+             step = max(1, len(all_locs) // 20)
+             sampled_locs = [{"lat": l.latitude, "lng": l.longitude} for l in all_locs[::step]]
+             
+             favorite_photos = []
+             try:
+                if trip.favorite_photos:
+                    if isinstance(trip.favorite_photos, str):
+                        favorite_photos = json.loads(trip.favorite_photos)
+                    elif isinstance(trip.favorite_photos, list):
+                        favorite_photos = trip.favorite_photos
+             except: pass
 
-                 content_item = TripBookResponse(
-                    id=trip.id,
-                    name=trip.name,
-                    description=trip.description,
-                    map_id=trip.map_id,
-                    created_by=trip.created_by,
-                    started_at=trip.started_at,
-                    ended_at=trip.ended_at,
-                    participants_count=len(trip.participants),
-                    locations=sampled_locs,
-                    rating=trip.rating,
-                    favorite_photos=favorite_photos,
-                    creator_username=creator.username if creator else None,
-                    creator_avatar_url=creator.avatar_url if creator else None
-                 )
-        elif post.content_type == 'map':
-             res = await db.execute(select(Map).where(Map.id == post.content_id))
-             map_obj = res.scalar_one_or_none()
-             if map_obj:
-                 loc_count = (await db.execute(select(func.count(Place.id)).where(Place.map_id == map_obj.id))).scalar() or 0
-                 content_item = PublicMapResponse(
-                    id=map_obj.id,
-                    name=map_obj.name,
-                    icon=map_obj.icon,
-                    color=map_obj.color,
-                    location_count=loc_count,
-                    created_at=map_obj.created_at
-                 )
-                 
-        return content_item
+             content_item = TripBookResponse(
+                id=trip.id,
+                name=trip.name,
+                description=trip.description,
+                map_id=trip.map_id,
+                created_by=trip.created_by,
+                started_at=trip.started_at,
+                ended_at=trip.ended_at,
+                participants_count=len(trip.participants),
+                locations=sampled_locs,
+                rating=trip.rating,
+                favorite_photos=favorite_photos,
+                creator_username=creator.username if creator else None,
+                creator_avatar_url=creator.avatar_url if creator else None
+             )
+    elif post_type == 'map':
+         res = await db.execute(select(Map).where(Map.id == content_id))
+         map_obj = res.scalar_one_or_none()
+         if map_obj:
+             count_res = await db.execute(select(func.count(Place.id)).where(Place.map_id == map_obj.id))
+             loc_count = count_res.scalar() or 0
+             content_item = PublicMapResponse(
+                id=map_obj.id,
+                name=map_obj.name,
+                icon=map_obj.icon,
+                color=map_obj.color,
+                location_count=loc_count,
+                created_at=map_obj.created_at
+             )
+             
+    return content_item
+
+
+async def build_social_post_response(db: AsyncSession, post, current_user_id: str):
+    # Get Post Author Profile
+    p_res = await db.execute(select(Profile).where(Profile.user_id == post.user_id))
+    author_profile = p_res.scalar_one_or_none()
+    
+    # Get Interactions
+    likes_res = await db.execute(select(func.count(SocialPostLike.id)).where(SocialPostLike.post_id == post.id))
+    likes_count = likes_res.scalar() or 0
+    
+    comments_res = await db.execute(select(func.count(SocialPostComment.id)).where(SocialPostComment.post_id == post.id))
+    comments_count = comments_res.scalar() or 0
+    
+    is_liked_res = await db.execute(select(SocialPostLike).where(and_(SocialPostLike.post_id == post.id, SocialPostLike.user_id == current_user_id)))
+    is_liked = is_liked_res.scalar_one_or_none() is not None
+    
+    # Get Content
+    content = await get_social_content_details(db, post.content_type, post.content_id)
+    
+    return SocialPostResponse(
+        id=post.id,
+        user_id=post.user_id,
+        username=author_profile.username if author_profile else "Usuário",
+        avatar_url=author_profile.avatar_url if author_profile else None,
+        content_type=post.content_type,
+        content_id=post.content_id,
+        caption=post.caption,
+        created_at=post.created_at,
+        content=content,
+        likes_count=likes_count,
+        comments_count=comments_count,
+        is_liked=is_liked
+    )
 
     # Build Query
     query = select(SocialPost).join(User).outerjoin(Profile, Profile.user_id == SocialPost.user_id)
@@ -446,33 +484,9 @@ async def get_social_feed(
     
     feed_items = []
     for post in posts:
-        # Get Post Author Profile
-        p_res = await db.execute(select(Profile).where(Profile.user_id == post.user_id))
-        author_profile = p_res.scalar_one_or_none()
-        
-        # Get Interactions
-        likes_count = (await db.execute(select(func.count(SocialPostLike.id)).where(SocialPostLike.post_id == post.id))).scalar() or 0
-        comments_count = (await db.execute(select(func.count(SocialPostComment.id)).where(SocialPostComment.post_id == post.id))).scalar() or 0
-        is_liked = (await db.execute(select(SocialPostLike).where(and_(SocialPostLike.post_id == post.id, SocialPostLike.user_id == current_user.id)))).scalar_one_or_none() is not None
-        
-        # Get Content
-        content = await get_content_details(post)
-        
-        if content:
-            feed_items.append(SocialPostResponse(
-                id=post.id,
-                user_id=post.user_id,
-                username=author_profile.username if author_profile else "Usuário",
-                avatar_url=author_profile.avatar_url if author_profile else None,
-                content_type=post.content_type,
-                content_id=post.content_id,
-                caption=post.caption,
-                created_at=post.created_at,
-                content=content,
-                likes_count=likes_count,
-                comments_count=comments_count,
-                is_liked=is_liked
-            ))
+        resp = await build_social_post_response(db, post, current_user.id)
+        if resp.content:
+            feed_items.append(resp)
             
     return SocialFeedResponse(items=feed_items)
 
@@ -588,21 +602,8 @@ async def repost_content(
         "username": current_user.email # Or username from profile
     }, db)
     
-    # We need to return the full response, which is complex. 
-    # For simplicity, returning a partial response or fetching the feed item here would be better.
-    # But let's try to construct it manually or fetch it.
-    
-    # TODO: Fetch full details for response
-    # For now returning basic structure, frontend will likely just refresh feed or prepend this.
-    return SocialPostResponse(
-        id=post.id,
-        user_id=post.user_id,
-        content_type=post.content_type,
-        content_id=post.content_id,
-        caption=post.caption,
-        created_at=post.created_at,
-        content=None # Frontend might need to refetch or we implement full fetch logic here
-    )
+    # Return full response
+    return await build_social_post_response(db, post, current_user.id)
 
 
 @router.post("/posts/{post_id}/like")
@@ -768,7 +769,7 @@ async def share_check_in(
         "username": current_user.email
     }, db)
     
-    return {"status": "success", "post_id": post.id}
+    return await build_social_post_response(db, post, current_user.id)
 
 
 @router.post("/trip/{trip_id}/share")
@@ -806,7 +807,7 @@ async def share_trip(
         "username": current_user.email
     }, db)
     
-    return {"status": "success", "post_id": post.id}
+    return await build_social_post_response(db, post, current_user.id)
 
 
 @router.post("/map/{map_id}/share")
@@ -844,7 +845,7 @@ async def share_map(
         "username": current_user.email
     }, db)
     
-    return {"status": "success", "post_id": post.id}
+    return await build_social_post_response(db, post, current_user.id)
 
 
 @router.post("/map/{map_id}/copy")

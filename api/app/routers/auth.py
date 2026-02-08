@@ -73,6 +73,8 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
     """
     Autentica um usuário e retorna tokens JWT.
     """
+    from app.main import logger
+    logger.info(f"Tentativa de login para o email: {credentials.email}")
     result = await db.execute(select(User).where(User.email == credentials.email))
     user = result.scalar_one_or_none()
     
