@@ -89,44 +89,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware de Logging expandido para depuração total (Entrada e Saída)
-class DebugLoggingMiddleware:
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        method = scope["method"]
-        path = scope["path"]
-        headers = dict(scope.get("headers", []))
-        headers_str = {k.decode('utf-8', 'ignore'): v.decode('utf-8', 'ignore') for k, v in headers.items()}
-        
-        logger.info(f">>> [IN] {method} {path} | Host: {headers_str.get('host', 'none')} | Origin: {headers_str.get('origin', 'none')}")
-
-        try:
-            async def send_wrapper(message):
-                if message["type"] == "http.response.start":
-                    status = message["status"]
-                    resp_headers = dict(message.get("headers", []))
-                    resp_headers_str = {k.decode('utf-8', 'ignore'): v.decode('utf-8', 'ignore') for k, v in resp_headers.items()}
-                    logger.info(f"<<< [OUT] {method} {path} | Status: {status}")
-                    if "access-control-allow-origin" in resp_headers_str:
-                        logger.info(f"    CORS OK: {resp_headers_str['access-control-allow-origin']}")
-                    else:
-                        logger.warning(f"    CORS MISSING in response heads!")
-                    
-                await send(message)
-
-            await self.app(scope, receive, send_wrapper)
-        except Exception as e:
-            error_trace = traceback.format_exc()
-            logger.error(f"!!! CRASH NO MIDDLEWARE: {str(e)}\n{error_trace}")
-            raise e
-
-app.add_middleware(DebugLoggingMiddleware)
+# Static files (uploads)
+if os.path.exists(settings.upload_dir):
+    app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 # Exception Handler Global (Modo de Diagnóstico)
 from fastapi.responses import JSONResponse
@@ -144,10 +109,6 @@ async def global_exception_handler(request: Request, exc: Exception):
             "method": request.method
         }
     )
-
-# Static files (uploads)
-if os.path.exists(settings.upload_dir):
-    app.mount("/uploads", StaticFiles(directory=settings.upload_dir), name="uploads")
 
 @app.get("/debug/cors-check")
 async def cors_check(request: Request):

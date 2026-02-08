@@ -166,7 +166,7 @@ async def create_map(
                 "content_type": "map",
                 "id": new_map.id,
                 "title": "Novo Mapa",
-                "description": f"{current_user.username} criou um novo mapa público: {new_map.name}",
+                "description": f"{current_user.email} criou um novo mapa público: {new_map.name}",
                 "created_by": current_user.id
             }, db)
         except Exception as e:
