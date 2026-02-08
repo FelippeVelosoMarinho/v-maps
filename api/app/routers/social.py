@@ -1,345 +1,34 @@
 """
 Router para funcionalidades sociais: Likes, Comments, Perfil Público
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timezone
+import json
 from app.database import get_db
 from app.models.user import User
 from app.models.profile import Profile
 from app.models.map import Map
 from app.models.place import Place
 from app.models.check_in import CheckIn
-from app.models.social import CheckInLike, CheckInComment, TripLike, TripComment, MapLike, MapComment, SocialPost, SocialPostLike, SocialPostComment
+from app.models.social import SocialPost, SocialPostLike, SocialPostComment
 from app.models.friendship import Friendship, FriendshipStatus
-from app.models.map_member import MapMember
-from app.models.group import GroupMember, GroupMap
-from app.models.user_social import FavoritePlace, WishListPlace
-from app.models.trip import Trip, TripParticipant, TripLocation
-from app.schemas.check_in import CheckInWithDetails
+from app.models.trip import Trip
 from app.schemas.social import (
-    CheckInLikeResponse,
-    CheckInCommentCreate,
-    CheckInCommentUpdate,
-    CheckInCommentResponse,
-    PublicProfileResponse,
-    PublicMapResponse,
-    PublicCheckInResponse,
-    MapMemberWithColor,
-    PlaceWithCreator,
-    UserPlaceInteractionCreate,
-    UserPlaceInteractionResponse,
-    TripBookResponse,
-    SocialFeedResponse,
-    SocialPostResponse,
-    SocialPostCreate
+    PublicMapResponse, PublicProfileResponse, PublicCheckInResponse,
+    SocialFeedResponse, SocialPostResponse, TripBookResponse
 )
+from app.schemas.check_in import CheckInWithDetails
 from app.utils.dependencies import get_current_user
-from app.utils.permissions import check_map_access
-import json
 
 router = APIRouter(prefix="/social", tags=["Social"])
 
-
 # =====================
-# Likes
-# =====================
-
-@router.post("/check-ins/{check_in_id}/like", response_model=CheckInLikeResponse)
-async def like_check_in(
-    check_in_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Curtir um check-in"""
-    # Verificar se o check-in existe
-    result = await db.execute(
-        select(CheckIn).where(CheckIn.id == check_in_id)
-    )
-    check_in = result.scalar_one_or_none()
-    
-    if not check_in:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Check-in não encontrado"
-        )
-    
-    # Verificar se já curtiu
-    result = await db.execute(
-        select(CheckInLike).where(
-            and_(
-                CheckInLike.check_in_id == check_in_id,
-                CheckInLike.user_id == current_user.id
-            )
-        )
-    )
-    existing_like = result.scalar_one_or_none()
-    
-    if existing_like:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Você já curtiu este check-in"
-        )
-    
-    # Criar like
-    like = CheckInLike(
-        check_in_id=check_in_id,
-        user_id=current_user.id
-    )
-    db.add(like)
-    await db.commit()
-    await db.refresh(like)
-    
-    # Buscar dados do perfil
-    result = await db.execute(
-        select(Profile).where(Profile.user_id == current_user.id)
-    )
-    profile = result.scalar_one_or_none()
-    
-    return CheckInLikeResponse(
-        id=like.id,
-        check_in_id=like.check_in_id,
-        user_id=like.user_id,
-        username=profile.username if profile else None,
-        avatar_url=profile.avatar_url if profile else None,
-        created_at=like.created_at
-    )
-
-
-@router.delete("/check-ins/{check_in_id}/like", status_code=status.HTTP_204_NO_CONTENT)
-async def unlike_check_in(
-    check_in_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Remover curtida de um check-in"""
-    result = await db.execute(
-        select(CheckInLike).where(
-            and_(
-                CheckInLike.check_in_id == check_in_id,
-                CheckInLike.user_id == current_user.id
-            )
-        )
-    )
-    like = result.scalar_one_or_none()
-    
-    if not like:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Like não encontrado"
-        )
-    
-    await db.delete(like)
-    await db.commit()
-
-
-@router.get("/check-ins/{check_in_id}/likes", response_model=list[CheckInLikeResponse])
-async def get_check_in_likes(
-    check_in_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Listar curtidas de um check-in"""
-    result = await db.execute(
-        select(CheckInLike, Profile)
-        .outerjoin(Profile, Profile.user_id == CheckInLike.user_id)
-        .where(CheckInLike.check_in_id == check_in_id)
-        .order_by(CheckInLike.created_at.desc())
-    )
-    
-    likes = []
-    for like, profile in result.all():
-        likes.append(CheckInLikeResponse(
-            id=like.id,
-            check_in_id=like.check_in_id,
-            user_id=like.user_id,
-            username=profile.username if profile else None,
-            avatar_url=profile.avatar_url if profile else None,
-            created_at=like.created_at
-        ))
-    
-    return likes
-
-
-# =====================
-# Comments
+# Helpers for Social Feed
 # =====================
 
-@router.post("/check-ins/{check_in_id}/comments", response_model=CheckInCommentResponse)
-async def create_comment(
-    check_in_id: str,
-    comment_data: CheckInCommentCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Criar comentário em um check-in"""
-    # Verificar se o check-in existe
-    result = await db.execute(
-        select(CheckIn).where(CheckIn.id == check_in_id)
-    )
-    check_in = result.scalar_one_or_none()
-    
-    if not check_in:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Check-in não encontrado"
-        )
-    
-    # Criar comentário
-    comment = CheckInComment(
-        check_in_id=check_in_id,
-        user_id=current_user.id,
-        content=comment_data.content
-    )
-    db.add(comment)
-    await db.commit()
-    await db.refresh(comment)
-    
-    # Buscar dados do perfil
-    result = await db.execute(
-        select(Profile).where(Profile.user_id == current_user.id)
-    )
-    profile = result.scalar_one_or_none()
-    
-    return CheckInCommentResponse(
-        id=comment.id,
-        check_in_id=comment.check_in_id,
-        user_id=comment.user_id,
-        username=profile.username if profile else None,
-        avatar_url=profile.avatar_url if profile else None,
-        content=comment.content,
-        created_at=comment.created_at,
-        updated_at=comment.updated_at
-    )
-
-
-@router.get("/check-ins/{check_in_id}/comments", response_model=list[CheckInCommentResponse])
-async def get_check_in_comments(
-    check_in_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Listar comentários de um check-in"""
-    result = await db.execute(
-        select(CheckInComment, Profile)
-        .outerjoin(Profile, Profile.user_id == CheckInComment.user_id)
-        .where(CheckInComment.check_in_id == check_in_id)
-        .order_by(CheckInComment.created_at.asc())
-    )
-    
-    comments = []
-    for comment, profile in result.all():
-        comments.append(CheckInCommentResponse(
-            id=comment.id,
-            check_in_id=comment.check_in_id,
-            user_id=comment.user_id,
-            username=profile.username if profile else None,
-            avatar_url=profile.avatar_url if profile else None,
-            content=comment.content,
-            created_at=comment.created_at,
-            updated_at=comment.updated_at
-        ))
-    
-    return comments
-
-
-@router.put("/comments/{comment_id}", response_model=CheckInCommentResponse)
-async def update_comment(
-    comment_id: str,
-    comment_data: CheckInCommentUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Atualizar comentário"""
-    result = await db.execute(
-        select(CheckInComment).where(CheckInComment.id == comment_id)
-    )
-    comment = result.scalar_one_or_none()
-    
-    if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comentário não encontrado"
-        )
-    
-    if comment.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não pode editar este comentário"
-        )
-    
-    comment.content = comment_data.content
-    await db.commit()
-    await db.refresh(comment)
-    
-    # Buscar dados do perfil
-    result = await db.execute(
-        select(Profile).where(Profile.user_id == current_user.id)
-    )
-    profile = result.scalar_one_or_none()
-    
-    return CheckInCommentResponse(
-        id=comment.id,
-        check_in_id=comment.check_in_id,
-        user_id=comment.user_id,
-        username=profile.username if profile else None,
-        avatar_url=profile.avatar_url if profile else None,
-        content=comment.content,
-        created_at=comment.created_at,
-        updated_at=comment.updated_at
-    )
-
-
-@router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_comment(
-    comment_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Deletar comentário"""
-    result = await db.execute(
-        select(CheckInComment).where(CheckInComment.id == comment_id)
-    )
-    comment = result.scalar_one_or_none()
-    
-    if not comment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Comentário não encontrado"
-        )
-    
-    if comment.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não pode deletar este comentário"
-        )
-    
-    await db.delete(comment)
-    await db.commit()
-
-
-# =====================
-# Social Feed
-# =====================
-
-@router.get("/feed", response_model=SocialFeedResponse)
-async def get_social_feed(
-    limit: int = 50,
-    skip: int = 0,
-    feed_type: str = "for_you", # "for_you" (global), "following" (friends), or "personal" (me)
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Obter feed social usando SocialPosts"""
-    if limit <= 0:
-        return SocialFeedResponse(items=[])
-    
-    if limit > 100:
-        limit = 100
-    
-# Helper to fetch and format social content
 async def get_social_content_details(db: AsyncSession, post_type: str, content_id: str):
     content_item = None
     if post_type == 'check_in':
@@ -369,7 +58,11 @@ async def get_social_content_details(db: AsyncSession, post_type: str, content_i
                 shared_to_feed=ci.shared_to_feed
             )
     elif post_type == 'trip':
-         res = await db.execute(select(Trip).where(Trip.id == content_id).options(selectinload(Trip.participants), selectinload(Trip.locations)))
+         res = await db.execute(
+             select(Trip)
+             .where(Trip.id == content_id)
+             .options(selectinload(Trip.participants), selectinload(Trip.locations))
+         )
          trip = res.scalar_one_or_none()
          if trip:
              cr_res = await db.execute(select(Profile).where(Profile.user_id == trip.created_by))
@@ -421,7 +114,7 @@ async def get_social_content_details(db: AsyncSession, post_type: str, content_i
     return content_item
 
 
-async def build_social_post_response(db: AsyncSession, post, current_user_id: str):
+async def build_social_post_response(db: AsyncSession, post: SocialPost, current_user_id: str):
     # Get Post Author Profile
     p_res = await db.execute(select(Profile).where(Profile.user_id == post.user_id))
     author_profile = p_res.scalar_one_or_none()
@@ -433,7 +126,10 @@ async def build_social_post_response(db: AsyncSession, post, current_user_id: st
     comments_res = await db.execute(select(func.count(SocialPostComment.id)).where(SocialPostComment.post_id == post.id))
     comments_count = comments_res.scalar() or 0
     
-    is_liked_res = await db.execute(select(SocialPostLike).where(and_(SocialPostLike.post_id == post.id, SocialPostLike.user_id == current_user_id)))
+    is_liked_res = await db.execute(
+        select(SocialPostLike)
+        .where(and_(SocialPostLike.post_id == post.id, SocialPostLike.user_id == current_user_id))
+    )
     is_liked = is_liked_res.scalar_one_or_none() is not None
     
     # Get Content
@@ -454,7 +150,25 @@ async def build_social_post_response(db: AsyncSession, post, current_user_id: st
         is_liked=is_liked
     )
 
-    # Build Query
+# =====================
+# Endpoints
+# =====================
+
+@router.get("/feed", response_model=SocialFeedResponse)
+async def get_social_feed(
+    limit: int = 50,
+    skip: int = 0,
+    feed_type: str = "for_you", # "for_you", "following", or "personal"
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Obter feed social consolidado"""
+    if limit <= 0:
+        return SocialFeedResponse(items=[])
+    
+    if limit > 100:
+        limit = 100
+        
     query = select(SocialPost).join(User).outerjoin(Profile, Profile.user_id == SocialPost.user_id)
     
     if feed_type == "following":
@@ -475,8 +189,6 @@ async def build_social_post_response(db: AsyncSession, post, current_user_id: st
     elif feed_type == "personal":
         query = query.where(SocialPost.user_id == current_user.id)
         
-    # 'for_you' shows all
-    
     query = query.order_by(desc(SocialPost.created_at)).offset(skip).limit(limit)
     
     result = await db.execute(query)
@@ -485,11 +197,67 @@ async def build_social_post_response(db: AsyncSession, post, current_user_id: st
     feed_items = []
     for post in posts:
         resp = await build_social_post_response(db, post, current_user.id)
+        # SÓ incluimos se o conteúdo ainda existir
         if resp.content:
             feed_items.append(resp)
             
     return SocialFeedResponse(items=feed_items)
 
+@router.post("/posts/{post_id}/like")
+async def like_post(
+    post_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Curtir uma publicação do feed"""
+    # Verificar se já curtiu
+    existing = await db.execute(
+        select(SocialPostLike).where(
+            and_(SocialPostLike.post_id == post_id, SocialPostLike.user_id == current_user.id)
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"status": "already_liked"}
+    
+    new_like = SocialPostLike(post_id=post_id, user_id=current_user.id)
+    db.add(new_like)
+    await db.commit()
+    return {"status": "liked"}
+
+@router.delete("/posts/{post_id}/like")
+async def unlike_post(
+    post_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Descurtir uma publicação do feed"""
+    existing = await db.execute(
+        select(SocialPostLike).where(
+            and_(SocialPostLike.post_id == post_id, SocialPostLike.user_id == current_user.id)
+        )
+    )
+    like = existing.scalar_one_or_none()
+    if like:
+        await db.delete(like)
+        await db.commit()
+    return {"status": "unliked"}
+
+@router.post("/posts/{post_id}/comments")
+async def comment_post(
+    post_id: str,
+    content: str = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Comentar em uma publicação do feed"""
+    new_comment = SocialPostComment(
+        post_id=post_id,
+        user_id=current_user.id,
+        content=content
+    )
+    db.add(new_comment)
+    await db.commit()
+    return {"status": "commented"}
 
 @router.get("/friends/suggestions", response_model=list[PublicProfileResponse])
 async def get_friend_suggestions(
@@ -497,7 +265,7 @@ async def get_friend_suggestions(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Sugestões de amigos (Amigos dos amigos)"""
+    """Sugestões de amigos"""
     # 1. Get my friends
     my_friends_res = await db.execute(
         select(Friendship).where(
@@ -510,7 +278,7 @@ async def get_friend_suggestions(
         my_friend_ids.add(f.addressee_id if f.requester_id == current_user.id else f.requester_id)
         
     if not my_friend_ids:
-        # Fallback: Random users if no friends yet
+        # Fallback: Random users
         random_users = await db.execute(
             select(Profile).where(Profile.user_id != current_user.id).limit(limit)
         )
@@ -518,31 +286,45 @@ async def get_friend_suggestions(
     else:
         # 2. Get friends of friends
         fof_res = await db.execute(
-            select(Friendship).where(
-                and_(Friendship.status == FriendshipStatus.ACCEPTED,
-                     or_(Friendship.requester_id.in_(my_friend_ids), Friendship.addressee_id.in_(my_friend_ids)))
+            select(Friendship)
+            .where(
+                and_(
+                    Friendship.status == FriendshipStatus.ACCEPTED,
+                    or_(Friendship.requester_id.in_(my_friend_ids), Friendship.addressee_id.in_(my_friend_ids))
+                )
             )
         )
-        
-        candidate_ids = set()
+        fof_ids = set()
         for f in fof_res.scalars().all():
             fid = f.addressee_id if f.requester_id in my_friend_ids else f.requester_id
             if fid != current_user.id and fid not in my_friend_ids:
-                candidate_ids.add(fid)
-                
-        if not candidate_ids:
-             # Fallback
-            random_users = await db.execute(
-                select(Profile).where(and_(Profile.user_id != current_user.id, Profile.user_id.notin_(my_friend_ids))).limit(limit)
+                fof_ids.add(fid)
+        
+        if not fof_ids:
+            # Fallback
+            random_res = await db.execute(
+                select(Profile).where(
+                    and_(Profile.user_id != current_user.id, ~Profile.user_id.in_(my_friend_ids))
+                ).limit(limit)
             )
-            profiles = random_users.scalars().all()
+            profiles = random_res.scalars().all()
         else:
-            profiles_res = await db.execute(select(Profile).where(Profile.user_id.in_(candidate_ids)).limit(limit))
-            profiles = profiles_res.scalars().all()
+            profile_res = await db.execute(
+                select(Profile).where(Profile.user_id.in_(list(fof_ids))).limit(limit)
+            )
+            profiles = profile_res.scalars().all()
 
-    # Convert to response
+    # Format output
     result = []
     for p in profiles:
+        # Get stats
+        map_count = await db.execute(select(func.count(Map.id)).where(Map.created_by == p.user_id))
+        checkin_count = await db.execute(select(func.count(CheckIn.id)).where(CheckIn.user_id == p.user_id))
+        friend_count = await db.execute(select(func.count(Friendship.id)).where(
+            and_(Friendship.status == FriendshipStatus.ACCEPTED, 
+                 or_(Friendship.requester_id == p.user_id, Friendship.addressee_id == p.user_id))
+        ))
+        
         result.append(PublicProfileResponse(
             id=p.id,
             user_id=p.user_id,
@@ -550,510 +332,11 @@ async def get_friend_suggestions(
             avatar_url=p.avatar_url,
             bio=p.bio,
             created_at=p.created_at,
-            # Simplified for suggestions
-            is_friend=False,
-            friendship_status=None 
+            map_count=map_count.scalar() or 0,
+            check_in_count=checkin_count.scalar() or 0,
+            friend_count=friend_count.scalar() or 0
         ))
-        
     return result
-
-
-@router.post("/repost/{content_type}/{content_id}", response_model=SocialPostResponse)
-async def repost_content(
-    content_type: str,
-    content_id: str,
-    caption: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Repostar (compartilhar) um conteúdo no feed"""
-    if content_type not in ['check_in', 'trip', 'map']:
-        raise HTTPException(status_code=400, detail="Invalid content type")
-
-    # Verify content exists
-    if content_type == 'check_in':
-        exists = await db.execute(select(CheckIn).where(CheckIn.id == content_id))
-    elif content_type == 'trip':
-        exists = await db.execute(select(Trip).where(Trip.id == content_id))
-    elif content_type == 'map':
-        exists = await db.execute(select(Map).where(Map.id == content_id))
-        
-    if not exists.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Content not found")
-        
-    # Create SocialPost
-    post = SocialPost(
-        user_id=current_user.id,
-        content_type=content_type,
-        content_id=content_id,
-        caption=caption
-    )
-    db.add(post)
-    await db.commit()
-    await db.refresh(post)
-    
-    # Notify friends
-    from app.utils.websockets import manager
-    await manager.broadcast_to_friends(current_user.id, {
-        "type": "new_post",
-        "post_id": post.id,
-        "content_type": content_type,
-        "user_id": current_user.id,
-        "username": current_user.email # Or username from profile
-    }, db)
-    
-    # Return full response
-    return await build_social_post_response(db, post, current_user.id)
-
-
-@router.post("/posts/{post_id}/like")
-async def like_post(
-    post_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Curtir um post social"""
-    # Verify post exists
-    post_res = await db.execute(select(SocialPost).where(SocialPost.id == post_id))
-    post = post_res.scalar_one_or_none()
-    
-    if not post:
-        raise HTTPException(status_code=404, detail="Post não encontrado")
-    
-    # Check if already liked
-    existing = await db.execute(
-        select(SocialPostLike).where(
-            and_(SocialPostLike.post_id == post_id, SocialPostLike.user_id == current_user.id)
-        )
-    )
-    
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Post já curtido")
-    
-    # Create like
-    like = SocialPostLike(post_id=post_id, user_id=current_user.id)
-    db.add(like)
-    await db.commit()
-    
-    # Notify post author
-    if post.user_id != current_user.id:
-        from app.utils.websockets import manager
-        profile_res = await db.execute(select(Profile).where(Profile.user_id == current_user.id))
-        profile = profile_res.scalar_one_or_none()
-        
-        await manager.send_to_user(post.user_id, {
-            "type": "post_like",
-            "post_id": post_id,
-            "user_id": current_user.id,
-            "username": profile.username if profile else current_user.email,
-            "title": "Nova Curtida",
-            "description": f"{profile.username if profile else 'Alguém'} curtiu sua publicação"
-        })
-    
-    return {"status": "success", "liked": True}
-
-
-@router.delete("/posts/{post_id}/like")
-async def unlike_post(
-    post_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Remover curtida de um post social"""
-    like_res = await db.execute(
-        select(SocialPostLike).where(
-            and_(SocialPostLike.post_id == post_id, SocialPostLike.user_id == current_user.id)
-        )
-    )
-    like = like_res.scalar_one_or_none()
-    
-    if not like:
-        raise HTTPException(status_code=404, detail="Curtida não encontrada")
-    
-    await db.delete(like)
-    await db.commit()
-    
-    return {"status": "success", "liked": False}
-
-
-@router.post("/posts/{post_id}/comments")
-async def comment_post(
-    post_id: str,
-    content: str = Body(..., embed=True),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Comentar em um post social"""
-    # Verify post exists
-    post_res = await db.execute(select(SocialPost).where(SocialPost.id == post_id))
-    post = post_res.scalar_one_or_none()
-    
-    if not post:
-        raise HTTPException(status_code=404, detail="Post não encontrado")
-    
-    # Create comment
-    comment = SocialPostComment(
-        post_id=post_id,
-        user_id=current_user.id,
-        content=content
-    )
-    db.add(comment)
-    await db.commit()
-    await db.refresh(comment)
-    
-    # Get commenter profile
-    profile_res = await db.execute(select(Profile).where(Profile.user_id == current_user.id))
-    profile = profile_res.scalar_one_or_none()
-    
-    # Notify post author
-    if post.user_id != current_user.id:
-        from app.utils.websockets import manager
-        await manager.send_to_user(post.user_id, {
-            "type": "post_comment",
-            "post_id": post_id,
-            "comment_id": comment.id,
-            "user_id": current_user.id,
-            "username": profile.username if profile else current_user.email,
-            "title": "Novo Comentário",
-            "description": f"{profile.username if profile else 'Alguém'} comentou em sua publicação"
-        })
-    
-    return {
-        "id": comment.id,
-        "post_id": comment.post_id,
-        "user_id": comment.user_id,
-        "username": profile.username if profile else None,
-        "avatar_url": profile.avatar_url if profile else None,
-        "content": comment.content,
-        "created_at": comment.created_at
-    }
-
-
-@router.post("/check-in/{check_in_id}/share")
-async def share_check_in(
-    check_in_id: str,
-    caption: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Compartilhar um check-in no feed social (cria um SocialPost)"""
-    ci_result = await db.execute(select(CheckIn).where(CheckIn.id == check_in_id))
-    check_in = ci_result.scalar_one_or_none()
-    
-    if not check_in:
-        raise HTTPException(status_code=404, detail="Check-in não encontrado")
-    
-    if check_in.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Não autorizado")
-    
-    # Check if already shared?
-    # For now, allow multiple shares or just creation of SocialPost
-    post = SocialPost(
-        user_id=current_user.id,
-        content_type='check_in',
-        content_id=check_in_id,
-        caption=caption
-    )
-    db.add(post)
-    
-    # Legacy flag support
-    check_in.shared_to_feed = True
-    
-    await db.commit()
-    
-    # Notify
-    from app.utils.websockets import manager
-    await manager.broadcast_to_friends(current_user.id, {
-        "type": "new_post",
-        "post_id": post.id,
-        "username": current_user.email
-    }, db)
-    
-    return await build_social_post_response(db, post, current_user.id)
-
-
-@router.post("/trip/{trip_id}/share")
-async def share_trip(
-    trip_id: str,
-    caption: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Compartilhar uma viagem no feed social"""
-    t_result = await db.execute(select(Trip).where(Trip.id == trip_id))
-    trip = t_result.scalar_one_or_none()
-    
-    if not trip:
-        raise HTTPException(status_code=404, detail="Viagem não encontrada")
-    
-    if trip.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Não autorizado")
-    
-    post = SocialPost(
-        user_id=current_user.id,
-        content_type='trip',
-        content_id=trip_id,
-        caption=caption
-    )
-    db.add(post)
-    
-    trip.shared_to_feed = True
-    await db.commit()
-    
-    from app.utils.websockets import manager
-    await manager.broadcast_to_friends(current_user.id, {
-        "type": "new_post",
-        "post_id": post.id,
-        "username": current_user.email
-    }, db)
-    
-    return await build_social_post_response(db, post, current_user.id)
-
-
-@router.post("/map/{map_id}/share")
-async def share_map(
-    map_id: str,
-    caption: str | None = None,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Compartilhar um mapa no feed social"""
-    m_result = await db.execute(select(Map).where(Map.id == map_id))
-    map_obj = m_result.scalar_one_or_none()
-    
-    if not map_obj:
-        raise HTTPException(status_code=404, detail="Mapa não encontrado")
-    
-    if map_obj.created_by != current_user.id:
-        raise HTTPException(status_code=403, detail="Não autorizado")
-    
-    post = SocialPost(
-        user_id=current_user.id,
-        content_type='map',
-        content_id=map_id,
-        caption=caption
-    )
-    db.add(post)
-    
-    map_obj.shared_to_feed = True
-    await db.commit()
-    
-    from app.utils.websockets import manager
-    await manager.broadcast_to_friends(current_user.id, {
-        "type": "new_post",
-        "post_id": post.id,
-        "username": current_user.email
-    }, db)
-    
-    return await build_social_post_response(db, post, current_user.id)
-
-
-@router.post("/map/{map_id}/copy")
-async def copy_map(
-    map_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Copiar um mapa compartilhado para a lista do usuário atual"""
-    result = await db.execute(select(Map).where(Map.id == map_id))
-    original_map = result.scalar_one_or_none()
-    
-    if not original_map:
-        raise HTTPException(status_code=404, detail="Mapa não encontrado")
-    
-    # Criar novo mapa
-    new_map = Map(
-        name=f"Cópia de {original_map.name}",
-        icon=original_map.icon,
-        color=original_map.color,
-        created_by=current_user.id,
-        is_shared=False,
-        is_public=False
-    )
-    db.add(new_map)
-    await db.flush() # Gerar ID do novo mapa
-    
-    # Copiar lugares
-    places_result = await db.execute(select(Place).where(Place.map_id == map_id))
-    original_places = places_result.scalars().all()
-    
-    for place in original_places:
-        new_place = Place(
-            map_id=new_map.id,
-            name=place.name,
-            description=place.description,
-            lat=place.lat,
-            lng=place.lng,
-            address=place.address,
-            google_place_id=place.google_place_id,
-            created_by=current_user.id,
-            creator_color=place.creator_color
-        )
-        db.add(new_place)
-        
-    await db.commit()
-    return {"status": "success", "new_map_id": new_map.id}
-
-
-# =====================
-# Favorites and Wishlist
-# =====================
-
-@router.post("/favorites", response_model=UserPlaceInteractionResponse)
-async def add_favorite(
-    data: UserPlaceInteractionCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # Verificar se já é favorito
-    existing = await db.execute(
-        select(FavoritePlace).where(
-            and_(FavoritePlace.user_id == current_user.id, FavoritePlace.place_id == data.place_id)
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Lugar já está nos favoritos")
-    
-    fav = FavoritePlace(user_id=current_user.id, place_id=data.place_id)
-    db.add(fav)
-    await db.commit()
-    await db.refresh(fav)
-    return fav
-
-
-@router.delete("/favorites/{place_id}", status_code=204)
-async def remove_favorite(
-    place_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    result = await db.execute(
-        select(FavoritePlace).where(
-            and_(FavoritePlace.user_id == current_user.id, FavoritePlace.place_id == place_id)
-        )
-    )
-    fav = result.scalar_one_or_none()
-    if not fav:
-        raise HTTPException(status_code=404, detail="Não encontrado nos favoritos")
-    await db.delete(fav)
-    await db.commit()
-
-
-@router.get("/favorites", response_model=list[PlaceWithCreator])
-async def get_favorites(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Obter lugares favoritos do usuário atual"""
-    result = await db.execute(
-        select(Place, Profile)
-        .join(FavoritePlace, FavoritePlace.place_id == Place.id)
-        .outerjoin(Profile, Profile.user_id == Place.created_by)
-        .where(FavoritePlace.user_id == current_user.id)
-        .order_by(FavoritePlace.created_at.desc())
-    )
-    
-    places = []
-    for place, profile in result.all():
-        places.append(PlaceWithCreator(
-            id=place.id,
-            map_id=place.map_id,
-            name=place.name,
-            description=place.description,
-            lat=place.lat,
-            lng=place.lng,
-            address=place.address,
-            google_place_id=place.google_place_id,
-            created_by=place.created_by,
-            creator_color=place.creator_color,
-            creator_username=profile.username if profile else None,
-            creator_avatar_url=profile.avatar_url if profile else None,
-            created_at=place.created_at,
-            updated_at=place.updated_at
-        ))
-    
-    return places
-
-
-@router.post("/wishlist", response_model=UserPlaceInteractionResponse)
-async def add_to_wishlist(
-    data: UserPlaceInteractionCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    # Verificar se já está na lista
-    existing = await db.execute(
-        select(WishListPlace).where(
-            and_(WishListPlace.user_id == current_user.id, WishListPlace.place_id == data.place_id)
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Lugar já está na lista de desejos")
-    
-    wish = WishListPlace(user_id=current_user.id, place_id=data.place_id)
-    db.add(wish)
-    await db.commit()
-    await db.refresh(wish)
-    return wish
-
-
-@router.delete("/wishlist/{place_id}", status_code=204)
-async def remove_from_wishlist(
-    place_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    result = await db.execute(
-        select(WishListPlace).where(
-            and_(WishListPlace.user_id == current_user.id, WishListPlace.place_id == place_id)
-        )
-    )
-    wish = result.scalar_one_or_none()
-    if not wish:
-        raise HTTPException(status_code=404, detail="Não encontrado na lista de desejos")
-    await db.delete(wish)
-    await db.commit()
-
-
-@router.get("/wishlist", response_model=list[PlaceWithCreator])
-async def get_wishlist(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Obter lugares na lista de desejos do usuário atual"""
-    result = await db.execute(
-        select(Place, Profile)
-        .join(WishListPlace, WishListPlace.place_id == Place.id)
-        .outerjoin(Profile, Profile.user_id == Place.created_by)
-        .where(WishListPlace.user_id == current_user.id)
-        .order_by(WishListPlace.created_at.desc())
-    )
-    
-    places = []
-    for place, profile in result.all():
-        places.append(PlaceWithCreator(
-            id=place.id,
-            map_id=place.map_id,
-            name=place.name,
-            description=place.description,
-            lat=place.lat,
-            lng=place.lng,
-            address=place.address,
-            google_place_id=place.google_place_id,
-            created_by=place.created_by,
-            creator_color=place.creator_color,
-            creator_username=profile.username if profile else None,
-            creator_avatar_url=profile.avatar_url if profile else None,
-            created_at=place.created_at,
-            updated_at=place.updated_at
-        ))
-    
-    return places
-
-
-# =====================
-# Public Profile
-# =====================
 
 @router.get("/profile/{user_id}", response_model=PublicProfileResponse)
 async def get_public_profile(
@@ -1061,166 +344,46 @@ async def get_public_profile(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Obter perfil público de um usuário"""
-    # Buscar perfil
-    result = await db.execute(
-        select(Profile).where(Profile.user_id == user_id)
-    )
-    profile = result.scalar_one_or_none()
+    """Busca o perfil público de um usuário"""
+    res = await db.execute(select(Profile).where(Profile.user_id == user_id))
+    profile = res.scalar_one_or_none()
     
     if not profile:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Perfil não encontrado"
-        )
+        raise HTTPException(status_code=404, detail="Perfil não encontrado")
     
-    # Verificar se são amigos
-    is_friend = False
-    friendship_status = None
-    
-    result = await db.execute(
+    # Check friendship
+    f_res = await db.execute(
         select(Friendship).where(
             or_(
-                and_(
-                    Friendship.requester_id == current_user.id,
-                    Friendship.addressee_id == user_id
-                ),
-                and_(
-                    Friendship.requester_id == user_id,
-                    Friendship.addressee_id == current_user.id
-                )
+                and_(Friendship.requester_id == current_user.id, Friendship.addressee_id == user_id),
+                and_(Friendship.requester_id == user_id, Friendship.addressee_id == current_user.id)
             )
         )
     )
-    friendship = result.scalar_one_or_none()
+    friendship = f_res.scalar_one_or_none()
     
-    if friendship:
-        friendship_status = friendship.status.value
-        is_friend = friendship.status == FriendshipStatus.ACCEPTED
-    
-    # Contar mapas públicos
-    result = await db.execute(
-        select(func.count(Map.id)).where(
-            and_(
-                Map.created_by == user_id,
-                Map.is_public == True
-            )
-        )
-    )
-    map_count = result.scalar() or 0
-    
-    # Contar check-ins
-    result = await db.execute(
-        select(func.count(CheckIn.id)).where(CheckIn.user_id == user_id)
-    )
-    check_in_count = result.scalar() or 0
-    
-    # Contar amigos
-    result = await db.execute(
-        select(func.count(Friendship.id)).where(
-            and_(
-                or_(
-                    Friendship.requester_id == user_id,
-                    Friendship.addressee_id == user_id
-                ),
-                Friendship.status == FriendshipStatus.ACCEPTED
-            )
-        )
-    )
-    friend_count = result.scalar() or 0
+    is_friend = friendship and friendship.status == FriendshipStatus.ACCEPTED
+    status_str = friendship.status.value if friendship else None
 
-    # Contar favoritos
-    result = await db.execute(
-        select(func.count(FavoritePlace.id)).where(FavoritePlace.user_id == user_id)
-    )
-    favorite_count = result.scalar() or 0
-
-    # Contar wishlist
-    result = await db.execute(
-        select(func.count(WishListPlace.id)).where(WishListPlace.user_id == user_id)
-    )
-    wish_list_count = result.scalar() or 0
+    # Stats
+    map_count = await db.execute(select(func.count(Map.id)).where(Map.created_by == user_id))
+    checkin_count = await db.execute(select(func.count(CheckIn.id)).where(CheckIn.user_id == user_id))
+    friend_count = await db.execute(select(func.count(Friendship.id)).where(
+        and_(Friendship.status == FriendshipStatus.ACCEPTED, 
+             or_(Friendship.requester_id == user_id, Friendship.addressee_id == user_id))
+    ))
     
-    # Buscar mapas públicos (ou todos se for amigo)
+    # Public maps
+    map_res = await db.execute(select(Map).where(Map.created_by == user_id).limit(20))
+    maps = map_res.scalars().all()
     public_maps = []
-    if is_friend or current_user.id == user_id:
-        result = await db.execute(
-            select(Map, func.count(Place.id).label('location_count'))
-            .outerjoin(Place, Place.map_id == Map.id)
-            .where(
-                and_(
-                    Map.created_by == user_id,
-                    or_(Map.is_public == True, is_friend)
-                )
-            )
-            .group_by(Map.id)
-            .order_by(Map.created_at.desc())
-            .limit(10)
-        )
-        for map_obj, loc_count in result.all():
-            public_maps.append(PublicMapResponse(
-                id=map_obj.id,
-                name=map_obj.name,
-                icon=map_obj.icon,
-                color=map_obj.color,
-                location_count=loc_count,
-                created_at=map_obj.created_at
-            ))
-    else:
-        # Apenas mapas públicos
-        result = await db.execute(
-            select(Map, func.count(Place.id).label('location_count'))
-            .outerjoin(Place, Place.map_id == Map.id)
-            .where(
-                and_(
-                    Map.created_by == user_id,
-                    Map.is_public == True
-                )
-            )
-            .group_by(Map.id)
-            .order_by(Map.created_at.desc())
-            .limit(10)
-        )
-        for map_obj, loc_count in result.all():
-            public_maps.append(PublicMapResponse(
-                id=map_obj.id,
-                name=map_obj.name,
-                icon=map_obj.icon,
-                color=map_obj.color,
-                location_count=loc_count,
-                created_at=map_obj.created_at
-            ))
-    
-    # Buscar check-ins recentes (com likes e comments count)
-    recent_check_ins = []
-    result = await db.execute(
-        select(
-            CheckIn,
-            Place.name.label('place_name'),
-            func.count(func.distinct(CheckInLike.id)).label('like_count'),
-            func.count(func.distinct(CheckInComment.id)).label('comment_count')
-        )
-        .join(Place, Place.id == CheckIn.place_id)
-        .outerjoin(CheckInLike, CheckInLike.check_in_id == CheckIn.id)
-        .outerjoin(CheckInComment, CheckInComment.check_in_id == CheckIn.id)
-        .where(CheckIn.user_id == user_id)
-        .group_by(CheckIn.id, Place.name)
-        .order_by(CheckIn.created_at.desc())
-        .limit(10)
-    )
-    
-    for check_in, place_name, like_count, comment_count in result.all():
-        recent_check_ins.append(PublicCheckInResponse(
-            id=check_in.id,
-            place_name=place_name,
-            comment=check_in.comment,
-            rating=check_in.rating,
-            photo_url=check_in.photo_url,
-            visited_at=check_in.visited_at,
-            like_count=like_count,
-            comment_count=comment_count
+    for m in maps:
+        loc_res = await db.execute(select(func.count(Place.id)).where(Place.map_id == m.id))
+        public_maps.append(PublicMapResponse(
+            id=m.id, name=m.name, icon=m.icon, color=m.color,
+            location_count=loc_res.scalar() or 0, created_at=m.created_at
         ))
-    
+
     return PublicProfileResponse(
         id=profile.id,
         user_id=profile.user_id,
@@ -1228,237 +391,10 @@ async def get_public_profile(
         avatar_url=profile.avatar_url,
         bio=profile.bio,
         created_at=profile.created_at,
-        map_count=map_count,
-        check_in_count=check_in_count,
-        friend_count=friend_count,
-        favorite_count=favorite_count,
-        wish_list_count=wish_list_count,
-        public_maps=public_maps,
-        recent_check_ins=recent_check_ins,
+        map_count=map_count.scalar() or 0,
+        check_in_count=checkin_count.scalar() or 0,
+        friend_count=friend_count.scalar() or 0,
         is_friend=is_friend,
-        friendship_status=friendship_status
+        friendship_status=status_str,
+        public_maps=public_maps
     )
-
-
-# =====================
-# Map Members with Colors
-# =====================
-
-# Cores disponíveis para membros
-MEMBER_COLORS = [
-    "blue", "red", "green", "purple", "orange", 
-    "pink", "yellow", "cyan", "lime", "indigo"
-]
-
-
-@router.get("/maps/{map_id}/members", response_model=list[MapMemberWithColor])
-async def get_map_members_with_colors(
-    map_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Obter membros do mapa com suas cores"""
-    # Verificar acesso ao mapa
-    result = await db.execute(
-        select(Map).where(Map.id == map_id)
-    )
-    map_obj = result.scalar_one_or_none()
-    
-    if not map_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Mapa não encontrado"
-        )
-    
-    # Verificar se tem acesso via shared helper
-    has_access = await check_map_access(db, map_id, current_user.id)
-    if not has_access:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem acesso a este mapa"
-        )
-    
-    # Buscar membros diretos
-    direct_result = await db.execute(
-        select(MapMember, Profile)
-        .outerjoin(Profile, Profile.user_id == MapMember.user_id)
-        .where(MapMember.map_id == map_id)
-    )
-    
-    # Buscar membros de grupos vinculados
-    group_members_result = await db.execute(
-        select(GroupMember, Profile)
-        .join(GroupMap, GroupMap.group_id == GroupMember.group_id)
-        .outerjoin(Profile, Profile.user_id == GroupMember.user_id)
-        .where(GroupMap.map_id == map_id)
-    )
-    
-    group_members_all = group_members_result.all()
-
-    # Dicionário para evitar duplicatas: user_id -> MapMemberWithColor
-    members_dict = {}
-    
-    # 1. Adicionar membros diretos (têm prioridade pois têm cor personalizada)
-    for member, profile in direct_result.all():
-        members_dict[member.user_id] = MapMemberWithColor(
-            id=member.id,
-            user_id=member.user_id,
-            username=profile.username if profile else None,
-            avatar_url=profile.avatar_url if profile else None,
-            role=member.role,
-            color=member.color,
-            joined_at=member.joined_at
-        )
-
-    # 2. Adicionar owner (se não estiver)
-    owner_result = await db.execute(select(Profile).where(Profile.user_id == map_obj.created_by))
-    owner_profile = owner_result.scalar_one_or_none()
-    
-    if map_obj.created_by not in members_dict:
-        members_dict[map_obj.created_by] = MapMemberWithColor(
-            id=map_obj.id,
-            user_id=map_obj.created_by,
-            username=owner_profile.username if owner_profile else None,
-            avatar_url=owner_profile.avatar_url if owner_profile else None,
-            role="owner",
-            color="#3B82F6",
-            joined_at=map_obj.created_at
-        )
-        
-    
-    # 3. Adicionar membros de grupo (se ainda não estiverem)
-    for member, profile in group_members_all:
-        if member.user_id not in members_dict:
-            # Gerar cor determinística baseada no user_id
-            color_index = hash(member.user_id) % len(MEMBER_COLORS)
-            assigned_color = MEMBER_COLORS[color_index]
-            
-            members_dict[member.user_id] = MapMemberWithColor(
-                id=member.id, # ID do GroupMember
-                user_id=member.user_id,
-                username=profile.username if profile else None,
-                avatar_url=profile.avatar_url if profile else None,
-                role="group_member", # Role diferente para indicar origem
-                color=assigned_color,
-                joined_at=member.joined_at
-            )
-            
-    return list(members_dict.values())
-
-
-@router.put("/maps/{map_id}/members/{user_id}/color")
-async def update_member_color(
-    map_id: str,
-    user_id: str,
-    color: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Atualizar cor de um membro do mapa"""
-    if color not in MEMBER_COLORS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cor inválida. Cores disponíveis: {', '.join(MEMBER_COLORS)}"
-        )
-    
-    # Verificar se é owner do mapa
-    result = await db.execute(
-        select(Map).where(Map.id == map_id)
-    )
-    map_obj = result.scalar_one_or_none()
-    
-    if not map_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Mapa não encontrado"
-        )
-    
-    if map_obj.created_by != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas o dono do mapa pode alterar cores"
-        )
-    
-    # Atualizar cor do membro
-    result = await db.execute(
-        select(MapMember).where(
-            and_(
-                MapMember.map_id == map_id,
-                MapMember.user_id == user_id
-            )
-        )
-    )
-    member = result.scalar_one_or_none()
-    
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Membro não encontrado"
-        )
-    
-    member.color = color
-    await db.commit()
-    
-    return {"message": "Cor atualizada com sucesso"}
-
-
-# =====================
-# Places with Creator Info
-# =====================
-
-@router.get("/maps/{map_id}/places", response_model=list[PlaceWithCreator])
-async def get_map_places_with_creators(
-    map_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Obter lugares do mapa com informações do criador"""
-    # Verificar acesso ao mapa
-    result = await db.execute(
-        select(Map).where(Map.id == map_id)
-    )
-    map_obj = result.scalar_one_or_none()
-    
-    if not map_obj:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Mapa não encontrado"
-        )
-    
-    # Verificar se tem acesso (owner, membro ou group member)
-    has_access = await check_map_access(db, map_id, current_user.id)
-    
-    if not has_access and not map_obj.is_public:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Você não tem acesso a este mapa"
-        )
-    
-    # Buscar lugares com informações do criador
-    result = await db.execute(
-        select(Place, Profile)
-        .outerjoin(Profile, Profile.user_id == Place.created_by)
-        .where(Place.map_id == map_id)
-        .order_by(Place.created_at)
-    )
-    
-    places = []
-    for place, profile in result.all():
-        places.append(PlaceWithCreator(
-            id=place.id,
-            map_id=place.map_id,
-            name=place.name,
-            description=place.description,
-            lat=place.lat,
-            lng=place.lng,
-            address=place.address,
-            google_place_id=place.google_place_id,
-            created_by=place.created_by,
-            creator_color=place.creator_color,
-            creator_username=profile.username if profile else None,
-            creator_avatar_url=profile.avatar_url if profile else None,
-            created_at=place.created_at,
-            updated_at=place.updated_at
-        ))
-    
-    return places
