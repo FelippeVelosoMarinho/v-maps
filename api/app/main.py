@@ -7,6 +7,8 @@ import time
 import logging
 import json
 
+import traceback
+
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -104,22 +106,44 @@ class DebugLoggingMiddleware:
         
         logger.info(f">>> [IN] {method} {path} | Host: {headers_str.get('host', 'none')} | Origin: {headers_str.get('origin', 'none')}")
 
-        async def send_wrapper(message):
-            if message["type"] == "http.response.start":
-                status = message["status"]
-                resp_headers = dict(message.get("headers", []))
-                resp_headers_str = {k.decode('utf-8', 'ignore'): v.decode('utf-8', 'ignore') for k, v in resp_headers.items()}
-                logger.info(f"<<< [OUT] {method} {path} | Status: {status}")
-                if "access-control-allow-origin" in resp_headers_str:
-                    logger.info(f"    CORS OK: {resp_headers_str['access-control-allow-origin']}")
-                else:
-                    logger.warning(f"    CORS MISSING in response heads!")
-                
-            await send(message)
+        try:
+            async def send_wrapper(message):
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                    resp_headers = dict(message.get("headers", []))
+                    resp_headers_str = {k.decode('utf-8', 'ignore'): v.decode('utf-8', 'ignore') for k, v in resp_headers.items()}
+                    logger.info(f"<<< [OUT] {method} {path} | Status: {status}")
+                    if "access-control-allow-origin" in resp_headers_str:
+                        logger.info(f"    CORS OK: {resp_headers_str['access-control-allow-origin']}")
+                    else:
+                        logger.warning(f"    CORS MISSING in response heads!")
+                    
+                await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+            await self.app(scope, receive, send_wrapper)
+        except Exception as e:
+            error_trace = traceback.format_exc()
+            logger.error(f"!!! CRASH NO MIDDLEWARE: {str(e)}\n{error_trace}")
+            raise e
 
 app.add_middleware(DebugLoggingMiddleware)
+
+# Exception Handler Global (Modo de Diagnóstico)
+from fastapi.responses import JSONResponse
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    error_trace = traceback.format_exc()
+    logger.error(f"FATAL ERROR CAPTURED: {str(exc)}\n{error_trace}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "detail": str(exc),
+            "traceback": error_trace,
+            "path": request.url.path,
+            "method": request.method
+        }
+    )
 
 # Static files (uploads)
 if os.path.exists(settings.upload_dir):

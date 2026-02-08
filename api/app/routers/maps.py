@@ -156,7 +156,24 @@ async def create_map(
     
     # Get group info if shared with a group
     group_info = await get_map_group_info(new_map.id, db) if map_data.group_id else []
-    
+
+    # Notify friends if public or shared
+    if new_map.is_public:
+        try:
+            from app.utils.websockets import manager
+            await manager.broadcast_to_friends(current_user.id, {
+                "type": "new_post",
+                "content_type": "map",
+                "id": new_map.id,
+                "title": "Novo Mapa",
+                "description": f"{current_user.username} criou um novo mapa público: {new_map.name}",
+                "created_by": current_user.id
+            }, db)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Erro ao enviar notificação de novo mapa: {e}")
+
     return MapResponse(
         id=new_map.id,
         name=new_map.name,
@@ -169,18 +186,6 @@ async def create_map(
         updated_at=new_map.updated_at,
         shared_with_groups=group_info
     )
-
-    # Notify friends if public or shared
-    if new_map.is_public:
-        from app.utils.websockets import manager
-        await manager.broadcast_to_friends(current_user.id, {
-            "type": "new_post",
-            "content_type": "map",
-            "id": new_map.id,
-            "title": "Novo Mapa",
-            "description": f"{current_user.email} criou um novo mapa público: {new_map.name}",
-            "created_by": current_user.id
-        }, db)
 
 
 @router.get("/{map_id}", response_model=MapResponse)
