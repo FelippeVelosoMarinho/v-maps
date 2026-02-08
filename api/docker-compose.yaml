@@ -1,26 +1,6 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15
-    container_name: v-maps-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-v_maps}
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - v-maps-network
-
   backend:
     image: v-maps-backend:${VERSION:-latest}
     build:
@@ -31,24 +11,20 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-v_maps}
+      DATABASE_URL: sqlite+aiosqlite:///./data/vmaps.db
       SECRET_KEY: ${SECRET_KEY:-your-super-secret-key-change-in-production}
       ALGORITHM: ${ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
-      UPLOAD_DIR: /app/uploads
-    depends_on:
-      db:
-        condition: service_healthy
+      UPLOAD_DIR: /app/data/uploads
     volumes:
-      - uploads_data:/app/uploads
+      - v-maps-data:/app/data
     networks:
       - v-maps-network
 
 volumes:
-  postgres_data:
-  uploads_data:
+  v-maps-data:
 
 networks:
   v-maps-network:
