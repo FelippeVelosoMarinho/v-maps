@@ -229,6 +229,15 @@ async def send_friend_request(
     await db.commit()
     await db.refresh(friendship)
     
+    # Notify addressee
+    await manager.broadcast([data.addressee_id], {
+        "type": "friend_request",
+        "title": "Nova Solicitação de Amizade",
+        "content": f"{current_user.email} quer ser seu amigo.",
+        "friendship_id": friendship.id,
+        "requester_id": current_user.id
+    })
+    
     return friendship
 
 
@@ -269,6 +278,16 @@ async def respond_to_friend_request(
     friendship.status = FriendshipStatus(data.status.value)
     await db.commit()
     await db.refresh(friendship)
+    
+    if friendship.status == FriendshipStatus.ACCEPTED:
+        # Notify requester
+        await manager.broadcast([friendship.requester_id], {
+            "type": "friend_request_accepted",
+            "title": "Solicitação Aceita",
+            "content": f"{current_user.email} aceitou seu pedido de amizade.",
+            "friendship_id": friendship.id,
+            "friend_id": current_user.id
+        })
     
     return friendship
 

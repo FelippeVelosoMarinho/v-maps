@@ -167,9 +167,20 @@ async def create_map(
         created_by=new_map.created_by,
         created_at=new_map.created_at,
         updated_at=new_map.updated_at,
-        location_count=0,
         shared_with_groups=group_info
     )
+
+    # Notify friends if public or shared
+    if new_map.is_public:
+        from app.utils.websockets import manager
+        await manager.broadcast_to_friends(current_user.id, {
+            "type": "new_post",
+            "content_type": "map",
+            "id": new_map.id,
+            "title": "Novo Mapa",
+            "description": f"{current_user.email} criou um novo mapa público: {new_map.name}",
+            "created_by": current_user.id
+        }, db)
 
 
 @router.get("/{map_id}", response_model=MapResponse)

@@ -217,6 +217,19 @@ async def create_check_in(
         select(Profile).where(Profile.user_id == current_user.id)
     )
     profile = result.scalar_one_or_none()
+
+    # Notify friends
+    from app.utils.websockets import manager
+    await manager.broadcast_to_friends(current_user.id, {
+        "type": "new_post",
+        "content_type": "check_in",
+        "id": new_check_in.id,
+        "title": "Novo Check-in",
+        "description": f"{current_user.email} fez check-in em {place.name}",
+        "created_by": current_user.id,
+        "place_id": place.id,
+        "map_id": place.map_id
+    }, db)
     
     # Retornar com detalhes completos
     return CheckInWithDetails(

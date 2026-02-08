@@ -175,6 +175,19 @@ async def create_trip(
             }
         )
     
+    # Notify friends about new trip (if public map or just update feed)
+    # Checks if map is public or shared to decide visibility could be complex, 
+    # but generally if it's a new trip, friends might want to know.
+    # For now, let's notify friends that a trip started.
+    await manager.broadcast_to_friends(current_user.id, {
+        "type": "new_post",
+        "content_type": "trip",
+        "id": trip.id,
+        "title": "Nova Viagem",
+        "description": f"{current_user.email} iniciou uma viagem: {trip.name}",
+        "created_by": current_user.id
+    }, db)
+
     return trip
 
 

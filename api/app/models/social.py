@@ -118,3 +118,55 @@ class MapComment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user: Mapped["User"] = relationship("User")
+
+
+class SocialPost(Base):
+    """
+    Unified Social Post model.
+    Wraps content (CheckIn, Trip, Map) or stands alone (text post? for now only wrappers).
+    Allows Reposts and unified Feed.
+    """
+    __tablename__ = "social_posts"
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    # Content Reference
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False) # 'check_in', 'trip', 'map'
+    content_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    
+    # Metadata
+    caption: Mapped[str] = mapped_column(Text, nullable=True) # User's caption for the post/repost
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    
+    # Relationships
+    user: Mapped["User"] = relationship("User", backref="social_posts")
+    
+    # Interactions
+    likes: Mapped[list["SocialPostLike"]] = relationship("SocialPostLike", back_populates="post", cascade="all, delete-orphan")
+    comments: Mapped[list["SocialPostComment"]] = relationship("SocialPostComment", back_populates="post", cascade="all, delete-orphan")
+
+
+class SocialPostLike(Base):
+    __tablename__ = "social_post_likes"
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    post_id: Mapped[str] = mapped_column(String(36), ForeignKey("social_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    post: Mapped["SocialPost"] = relationship("SocialPost", back_populates="likes")
+    user: Mapped["User"] = relationship("User")
+
+
+class SocialPostComment(Base):
+    __tablename__ = "social_post_comments"
+    
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    post_id: Mapped[str] = mapped_column(String(36), ForeignKey("social_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    post: Mapped["SocialPost"] = relationship("SocialPost", back_populates="comments")
+    user: Mapped["User"] = relationship("User")

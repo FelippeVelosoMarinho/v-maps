@@ -37,6 +37,9 @@ async def get_db():
 
 async def create_tables():
     async with engine.begin() as conn:
+        # Import models to register them
+        from app.models import user, place, map, trip, check_in, friendship, profile, social, user_social, notification, group, map_member
+        
         # Habilitar modo WAL para melhor concorrência em SQLite
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.run_sync(Base.metadata.create_all)

@@ -50,4 +50,33 @@ class ConnectionManager:
         }
         await self.broadcast(participant_ids, message)
 
+    async def broadcast_to_friends(self, user_id: str, message: Any, db: Any):
+        """Send message to all friends of a user."""
+        from sqlalchemy import select, or_, and_
+        from app.models.friendship import Friendship, FriendshipStatus
+        
+        # Find all accepted friendships
+        result = await db.execute(
+            select(Friendship)
+            .where(
+                and_(
+                    Friendship.status == FriendshipStatus.ACCEPTED,
+                    or_(
+                        Friendship.requester_id == user_id,
+                        Friendship.addressee_id == user_id
+                    )
+                )
+            )
+        )
+        friendships = result.scalars().all()
+        
+        # Extract friend IDs
+        friend_ids = []
+        for f in friendships:
+            fid = f.addressee_id if f.requester_id == user_id else f.requester_id
+            friend_ids.append(fid)
+            
+        if friend_ids:
+            await self.broadcast(friend_ids, message)
+
 manager = ConnectionManager()

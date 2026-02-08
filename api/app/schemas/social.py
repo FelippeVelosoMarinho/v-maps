@@ -223,4 +223,38 @@ from app.schemas.check_in import CheckInWithDetails
 from typing import Union
 
 class SocialFeedResponse(BaseModel):
-    items: list[Union[CheckInWithDetails, TripBookResponse, PlaceWithCreator, PublicMapResponse]]
+    items: list[Union["SocialPostResponse", CheckInWithDetails, TripBookResponse, PlaceWithCreator, PublicMapResponse]]
+
+
+# =====================
+# Social Post Schemas
+# =====================
+
+class SocialPostBase(BaseModel):
+    caption: str | None = None
+
+
+class SocialPostCreate(SocialPostBase):
+    content_type: str # 'check_in', 'trip', 'map'
+    content_id: str
+
+
+class SocialPostResponse(SocialPostBase):
+    id: str
+    user_id: str
+    username: str | None = None
+    avatar_url: str | None = None
+    
+    content_type: str
+    content_id: str
+    
+    # The actual content embedded
+    content: Union[CheckInWithDetails, TripBookResponse, PlaceWithCreator, PublicMapResponse] | None = None
+    
+    created_at: datetime
+    likes_count: int = 0
+    comments_count: int = 0
+    is_liked: bool = False
+    
+    class Config:
+        from_attributes = True
