@@ -7,6 +7,8 @@ from sqlalchemy import select, func, and_, or_, desc
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timezone
 import json
+import traceback
+import logging
 from app.database import get_db
 from app.models.user import User
 from app.models.profile import Profile
@@ -22,6 +24,8 @@ from app.schemas.social import (
 )
 from app.schemas.check_in import CheckInWithDetails
 from app.utils.dependencies import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/social", tags=["Social"])
 
@@ -163,45 +167,53 @@ async def get_social_feed(
     current_user: User = Depends(get_current_user)
 ):
     """Obter feed social consolidado"""
-    if limit <= 0:
-        return SocialFeedResponse(items=[])
-    
-    if limit > 100:
-        limit = 100
+    try:
+        if limit <= 0:
+            return SocialFeedResponse(items=[])
         
-    query = select(SocialPost).join(User).outerjoin(Profile, Profile.user_id == SocialPost.user_id)
-    
-    if feed_type == "following":
-        # Get friends
-        friends_res = await db.execute(
-            select(Friendship).where(
-                and_(Friendship.status == FriendshipStatus.ACCEPTED,
-                     or_(Friendship.requester_id == current_user.id, Friendship.addressee_id == current_user.id))
-            )
-        )
-        friend_ids = []
-        for f in friends_res.scalars().all():
-             friend_ids.append(f.addressee_id if f.requester_id == current_user.id else f.requester_id)
-        friend_ids.append(current_user.id) # Include self
-        
-        query = query.where(SocialPost.user_id.in_(friend_ids))
-        
-    elif feed_type == "personal":
-        query = query.where(SocialPost.user_id == current_user.id)
-        
-    query = query.order_by(desc(SocialPost.created_at)).offset(skip).limit(limit)
-    
-    result = await db.execute(query)
-    posts = result.scalars().all()
-    
-    feed_items = []
-    for post in posts:
-        resp = await build_social_post_response(db, post, current_user.id)
-        # SÓ incluimos se o conteúdo ainda existir
-        if resp.content:
-            feed_items.append(resp)
+        if limit > 100:
+            limit = 100
             
-    return SocialFeedResponse(items=feed_items)
+        query = select(SocialPost).join(User).outerjoin(Profile, Profile.user_id == SocialPost.user_id)
+        
+        if feed_type == "following":
+            # Get friends
+            friends_res = await db.execute(
+                select(Friendship).where(
+                    and_(Friendship.status == FriendshipStatus.ACCEPTED,
+                         or_(Friendship.requester_id == current_user.id, Friendship.addressee_id == current_user.id))
+                )
+            )
+            friend_ids = []
+            for f in friends_res.scalars().all():
+                 friend_ids.append(f.addressee_id if f.requester_id == current_user.id else f.requester_id)
+            friend_ids.append(current_user.id) # Include self
+            
+            query = query.where(SocialPost.user_id.in_(friend_ids))
+            
+        elif feed_type == "personal":
+            query = query.where(SocialPost.user_id == current_user.id)
+            
+        query = query.order_by(desc(SocialPost.created_at)).offset(skip).limit(limit)
+        
+        result = await db.execute(query)
+        posts = result.scalars().all()
+        
+        feed_items = []
+        for post in posts:
+            resp = await build_social_post_response(db, post, current_user.id)
+            # SÓ incluimos se o conteúdo ainda existir
+            if resp.content:
+                feed_items.append(resp)
+                
+        return SocialFeedResponse(items=feed_items)
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        logger.error(f"FATAL ERROR IN SOCIAL FEED: {str(e)}\n{error_trace}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"DEBUG ERROR: {str(e)} | Trace: {error_trace[:200]}..."
+        )
 
 @router.post("/posts/{post_id}/like")
 async def like_post(
