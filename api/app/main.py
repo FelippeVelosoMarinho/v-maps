@@ -84,6 +84,7 @@ app.add_middleware(
         "https://tsapi.ciano.io",
         "capacitor://localhost",
         "http://localhost",
+        "https://localhost",
         "http://10.0.2.2:8000",
         "http://10.0.0.24:5173",
         "http://10.0.0.24",
