@@ -10,7 +10,7 @@ from app.models.map_member import MapMember
 from app.models.map_invite import MapInvite
 from app.models.friendship import Friendship, FriendshipStatus
 from app.models.group import Group, GroupMember, GroupMap, GroupInvite
-from app.models.social import CheckInLike, CheckInComment
+from app.models.social import CheckInLike, CheckInComment, SocialPost, SocialPostLike, SocialPostComment
 from app.models.user_social import FavoritePlace, WishListPlace
 from app.models.trip import Trip, TripParticipant, TripLocation
 from app.models.avatar import Avatar
@@ -38,6 +38,9 @@ __all__ = [
     "Trip",
     "TripParticipant",
     "TripLocation",
+    "SocialPost",
+    "SocialPostLike",
+    "SocialPostComment",
     "Avatar",
     "Notification",
     "Base",
