@@ -107,7 +107,22 @@ async def create_place(
     db.add(new_place)
     await db.commit()
     await db.refresh(new_place)
-    
+
+    # Broadcast to map members so other clients can refresh places
+    from app.utils.websockets import manager
+    member_ids_result = await db.execute(select(MapMember.user_id).where(MapMember.map_id == place_data.map_id))
+    member_ids = set(member_ids_result.scalars().all())
+    map_owner_result = await db.execute(select(Map.created_by).where(Map.id == place_data.map_id))
+    map_owner_id = map_owner_result.scalar_one_or_none()
+    if map_owner_id:
+        member_ids.add(map_owner_id)
+    if member_ids:
+        await manager.broadcast(list(member_ids), {
+            "type": "place_created",
+            "map_id": place_data.map_id,
+            "place_id": new_place.id,
+        })
+
     return new_place
 
 
@@ -196,7 +211,25 @@ async def delete_place(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Apenas o criador pode excluir o lugar"
         )
-    
+
+    map_id = place.map_id
+    place_id = place.id
+
+    # Broadcast to map members before deleting so clients can refresh
+    from app.utils.websockets import manager
+    member_ids_result = await db.execute(select(MapMember.user_id).where(MapMember.map_id == map_id))
+    member_ids = set(member_ids_result.scalars().all())
+    map_owner_result = await db.execute(select(Map.created_by).where(Map.id == map_id))
+    map_owner_id = map_owner_result.scalar_one_or_none()
+    if map_owner_id:
+        member_ids.add(map_owner_id)
+    if member_ids:
+        await manager.broadcast(list(member_ids), {
+            "type": "place_deleted",
+            "map_id": map_id,
+            "place_id": place_id,
+        })
+
     await db.delete(place)
     await db.commit()
 

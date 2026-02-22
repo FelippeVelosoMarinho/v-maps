@@ -280,7 +280,8 @@ async def respond_to_friend_request(
     await db.refresh(friendship)
     
     if friendship.status == FriendshipStatus.ACCEPTED:
-        # Notify requester
+        manager.invalidate_friend_cache(friendship.requester_id)
+        manager.invalidate_friend_cache(friendship.addressee_id)
         await manager.broadcast([friendship.requester_id], {
             "type": "friend_request_accepted",
             "title": "Solicitação Aceita",
@@ -288,7 +289,7 @@ async def respond_to_friend_request(
             "friendship_id": friendship.id,
             "friend_id": current_user.id
         })
-    
+
     return friendship
 
 
@@ -319,9 +320,12 @@ async def remove_friend(
             detail="Você não tem permissão para esta ação"
         )
     
+    requester_id, addressee_id = friendship.requester_id, friendship.addressee_id
     await db.delete(friendship)
     await db.commit()
-    
+    manager.invalidate_friend_cache(requester_id)
+    manager.invalidate_friend_cache(addressee_id)
+
     return {"message": "Amizade removida com sucesso"}
 
 

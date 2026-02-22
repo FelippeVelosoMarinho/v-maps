@@ -125,20 +125,36 @@ async def get_user_profile(
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, token: str):
     """
-    WebSocket para notificações em tempo real.
+    WebSocket para notificações em tempo real. Heartbeat: server sends ping every 30s;
+    client should respond with pong to keep connection alive.
     """
+    import asyncio
+    import json
     from app.utils.security import verify_access_token
-    
+
     user_id = verify_access_token(token)
     if not user_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
     await manager.connect(websocket, user_id)
+    heartbeat_task = asyncio.create_task(manager._heartbeat_loop(websocket, user_id))
     try:
         while True:
-            # Manter conexão aberta e responder a pings se necessário
             data = await websocket.receive_text()
-            # O cliente atualmente não envia dados, mas mantemos o loop
+            manager.record_activity(websocket)
+            try:
+                msg = json.loads(data)
+                if msg.get("type") == "pong":
+                    pass
+            except (json.JSONDecodeError, TypeError):
+                pass
     except WebSocketDisconnect:
+        pass
+    finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
         manager.disconnect(websocket, user_id)

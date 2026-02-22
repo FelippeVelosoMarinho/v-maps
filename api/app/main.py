@@ -34,6 +34,7 @@ from app.routers import (
 async def lifespan(app: FastAPI):
     """Gerencia o ciclo de vida da aplicação."""
     # Startup
+    logger.info(f"--- STARTUP: USING DATABASE URL: {settings.database_url} ---")
     await create_tables()
     os.makedirs(settings.upload_dir, exist_ok=True)
     
