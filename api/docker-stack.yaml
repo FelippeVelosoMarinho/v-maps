@@ -20,7 +20,7 @@ services:
       UPLOAD_DIR: /app/data/uploads
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.v-maps-backend.rule=Host(`tsapi.ciano.io`) && PathPrefix(`/vmaps`)"
+      - "traefik.http.routers.v-maps-backend.rule=Host(`76.13.71.126`) && PathPrefix(`/vmaps`)"
       - "traefik.http.routers.v-maps-backend.entrypoints=websecure"
       - "traefik.http.routers.v-maps-backend.tls=true"
       - "traefik.http.routers.v-maps-backend.tls.certresolver=tlschallenge"

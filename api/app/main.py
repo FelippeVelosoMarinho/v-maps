@@ -78,6 +78,7 @@ app.add_middleware(
         "http://127.0.0.1:8081",
         "https://client.felippe-91e.workers.dev",
         "https://tsapi.ciano.io",
+        "https://76.13.71.126",
         "capacitor://localhost",
         "http://localhost",
         "https://localhost",
